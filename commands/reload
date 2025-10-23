@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Source Gokku helper functions
+if [ -f "/opt/gokku/scripts/plugin-helpers.sh" ]; then
+    source /opt/gokku/scripts/plugin-helpers.sh
+fi
+
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: $0 <service-name>"
+    exit 1
+fi
+
+echo "-----> Reloading nginx configuration for $SERVICE_NAME"
+
+# Check if container exists
+if ! container_exists "$SERVICE_NAME"; then
+    echo "Service '$SERVICE_NAME' not found"
+    echo "Create it with: gokku services:create nginx --name $SERVICE_NAME"
+    exit 1
+fi
+
+# Check if container is running
+if ! container_is_running "$SERVICE_NAME"; then
+    echo "Service '$SERVICE_NAME' is not running"
+    echo "Start it with: docker start $SERVICE_NAME"
+    exit 1
+fi
+
+# Test nginx configuration first
+echo "-----> Testing nginx configuration..."
+if ! docker exec "$SERVICE_NAME" nginx -t; then
+    echo "-----> Configuration test failed. Not reloading."
+    echo "Fix the configuration errors and try again."
+    exit 1
+fi
+
+# Reload nginx configuration
+echo "-----> Reloading nginx..."
+if docker exec "$SERVICE_NAME" nginx -s reload; then
+    echo "-----> Nginx configuration reloaded successfully"
+else
+    echo "-----> Failed to reload nginx configuration"
+    exit 1
+fi
+
+# Show status
+echo "-----> Nginx status:"
+docker exec "$SERVICE_NAME" nginx -s status 2>/dev/null || echo "Status not available"
+
+echo "-----> Configuration reloaded successfully"

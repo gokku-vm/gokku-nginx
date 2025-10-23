@@ -1,0 +1,36 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+APP_NAME="$2"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ]; then
+    echo "Usage: gokku nginx:remove-upstream <service> <app>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:remove-upstream nginx-lb api"
+    echo "  gokku nginx:remove-upstream nginx-lb web"
+    exit 1
+fi
+
+echo "-----> Removing upstream for app '$APP_NAME'"
+
+# Remove upstream configuration
+UPSTREAM_NAME="$APP_NAME"
+CONFIG_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/${UPSTREAM_NAME}.conf"
+
+if [ -f "$CONFIG_FILE" ]; then
+    rm "$CONFIG_FILE"
+    echo "-----> Upstream configuration removed: $CONFIG_FILE"
+
+    # Reload nginx if container is running
+    if container_is_running "$SERVICE_NAME"; then
+        echo "-----> Reloading nginx configuration"
+        docker exec "$SERVICE_NAME" nginx -s reload
+        echo "-----> Nginx configuration reloaded"
+    else
+        echo "-----> Nginx container not running, configuration will be updated on next start"
+    fi
+
+    echo "-----> Upstream '$UPSTREAM_NAME' removed"
+else
+    echo "-----> No upstream configuration found for app '$APP_NAME'"
+fi

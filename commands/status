@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# Source Gokku helper functions
+if [ -f "/opt/gokku/scripts/plugin-helpers.sh" ]; then
+    source /opt/gokku/scripts/plugin-helpers.sh
+fi
+
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: $0 <service-name>"
+    exit 1
+fi
+
+echo "Nginx status for $SERVICE_NAME:"
+echo "==============================="
+
+# Check if container exists
+if ! container_exists "$SERVICE_NAME"; then
+    echo "Service '$SERVICE_NAME' not found"
+    echo "Create it with: gokku services:create nginx --name $SERVICE_NAME"
+    exit 1
+fi
+
+# Check if container is running
+if ! container_is_running "$SERVICE_NAME"; then
+    echo "Service '$SERVICE_NAME' is not running"
+    echo "Start it with: docker start $SERVICE_NAME"
+    exit 1
+fi
+
+# Test nginx configuration
+echo "Configuration test:"
+echo "-------------------"
+if docker exec "$SERVICE_NAME" nginx -t; then
+    echo "✓ Configuration is valid"
+else
+    echo "✗ Configuration has errors"
+    exit 1
+fi
+
+echo ""
+
+# Show nginx status
+echo "Nginx process status:"
+echo "--------------------"
+docker exec "$SERVICE_NAME" nginx -s status 2>/dev/null || echo "Status not available"
+
+echo ""
+
+# Show active connections
+echo "Active connections:"
+echo "-------------------"
+docker exec "$SERVICE_NAME" netstat -an | grep :80 | wc -l | xargs echo "HTTP connections:"
+
+echo ""
+
+# Show nginx version
+echo "Nginx version:"
+echo "--------------"
+docker exec "$SERVICE_NAME" nginx -v 2>&1
+
+echo ""
+
+# Show container status
+echo "Container status:"
+echo "-----------------"
+STATUS=$(get_container_status "$SERVICE_NAME")
+PORT=$(get_container_port "$SERVICE_NAME" 80)
+UPTIME=$(get_container_uptime "$SERVICE_NAME")
+
+echo "Status: $STATUS"
+echo "Port: $PORT"
+echo "Uptime: $UPTIME"
+
+echo ""
+
+# Show recent errors if any
+SERVICE_DIR="/opt/gokku/services/$SERVICE_NAME"
+if [ -f "$SERVICE_DIR/logs/error.log" ]; then
+    ERROR_COUNT=$(tail -100 "$SERVICE_DIR/logs/error.log" | grep -c "error\|warn" 2>/dev/null || echo "0")
+    if [ "$ERROR_COUNT" -gt 0 ]; then
+        echo "Recent errors/warnings: $ERROR_COUNT"
+        echo "Check logs with: gokku nginx:logs $SERVICE_NAME"
+    else
+        echo "No recent errors or warnings"
+    fi
+fi

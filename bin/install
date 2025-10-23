@@ -1,0 +1,195 @@
+#!/bin/bash
+
+# Source Gokku helper functions
+if [ -f "/opt/gokku/scripts/plugin-helpers.sh" ]; then
+    source /opt/gokku/scripts/plugin-helpers.sh
+fi
+
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: $0 <service-name>"
+    exit 1
+fi
+
+echo "-----> Installing nginx service: $SERVICE_NAME"
+
+# Get next available port starting from 80
+PORT=$(get_next_port 9000)
+
+# Create nginx service directory
+SERVICE_DIR="/opt/gokku/services/$SERVICE_NAME"
+mkdir -p "$SERVICE_DIR/conf.d"
+mkdir -p "$SERVICE_DIR/ssl"
+mkdir -p "$SERVICE_DIR/logs"
+
+# Create main nginx configuration
+cat > "$SERVICE_DIR/nginx.conf" << 'EOF'
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+    use epoll;
+    multi_accept on;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # Logging format
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /var/log/nginx/access.log main;
+
+    # Performance settings
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    client_max_body_size 16M;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/json
+        application/javascript
+        application/xml+rss
+        application/atom+xml
+        image/svg+xml;
+
+    # Security headers
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Access-Control-Allow-Origin *;
+    add_header X-Real-IP $remote_addr;
+    add_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    add_header X-Forwarded-Proto $scheme;
+
+    # Include site configurations
+    include /etc/nginx/conf.d/*.conf;
+}
+EOF
+
+# Create default upstream configuration
+cat > "$SERVICE_DIR/conf.d/default.conf" << 'EOF'
+# Default nginx configuration
+# Add your upstream and server blocks here
+
+# Example upstream configuration:
+# upstream api_backend {
+#     server api-production:8080;
+#     server api-production-2:8080;
+# }
+
+# Example server configuration:
+# server {
+#     listen 80;
+#     server_name _;
+#
+#     location / {
+#         return 200 'Nginx is running!';
+#         add_header Content-Type text/plain;
+#     }
+# }
+EOF
+
+# Create nginx container
+echo "-----> Creating nginx container: $SERVICE_NAME"
+
+# Check if container already exists
+if container_exists "$SERVICE_NAME"; then
+    echo "-----> Container $SERVICE_NAME already exists, removing..."
+    docker stop "$SERVICE_NAME" 2>/dev/null || true
+    docker rm "$SERVICE_NAME" 2>/dev/null || true
+fi
+
+# Create the nginx container
+docker run -d \
+    --name "$SERVICE_NAME" \
+    --restart always \
+    -p "$PORT:80" \
+    -v "$SERVICE_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
+    -v "$SERVICE_DIR/conf.d:/etc/nginx/conf.d:ro" \
+    -v "$SERVICE_DIR/ssl:/etc/nginx/ssl:ro" \
+    -v "$SERVICE_DIR/logs:/var/log/nginx" \
+    nginx:alpine
+
+# Wait for container to be ready
+echo "-----> Waiting for nginx to start..."
+wait_for_container "$SERVICE_NAME" 30
+
+# Verify nginx is running
+if ! container_is_running "$SERVICE_NAME"; then
+    echo "-----> Failed to start nginx container"
+    docker logs "$SERVICE_NAME"
+    exit 1
+fi
+
+# Test nginx configuration
+echo "-----> Testing nginx configuration..."
+if ! docker exec "$SERVICE_NAME" nginx -t; then
+    echo "-----> Nginx configuration test failed"
+    docker logs "$SERVICE_NAME"
+    exit 1
+fi
+
+# Create service configuration file
+cat > "$SERVICE_DIR/service.conf" << EOF
+{
+    "service_name": "$SERVICE_NAME",
+    "service_type": "nginx",
+    "port": $PORT,
+    "config_dir": "$SERVICE_DIR",
+    "nginx_conf": "$SERVICE_DIR/nginx.conf",
+    "conf_d_dir": "$SERVICE_DIR/conf.d",
+    "ssl_dir": "$SERVICE_DIR/ssl",
+    "logs_dir": "$SERVICE_DIR/logs",
+    "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+    "status": "running"
+}
+EOF
+
+# Set proper permissions
+# chown -R gokku:gokku "$SERVICE_DIR" 2>/dev/null || true
+chmod -R 755 "$SERVICE_DIR"
+
+echo "-----> Nginx service installed successfully"
+echo "       Service: $SERVICE_NAME"
+echo "       Port: $PORT"
+echo "       Configuration: $SERVICE_DIR/nginx.conf"
+echo "       Site configs: $SERVICE_DIR/conf.d/"
+echo ""
+echo "-----> Next steps:"
+echo "       1. Configure your upstream servers in $SERVICE_DIR/conf.d/"
+echo "       2. Add server blocks for your domains"
+echo "       3. Run 'gokku nginx:reload $SERVICE_NAME' to apply changes"
+echo ""
+echo "-----> Example configuration:"
+echo "       # Add to $SERVICE_DIR/conf.d/your-app.conf"
+echo "       upstream your_app {"
+echo "           server your-app-production:8080;"
+echo "       }"
+echo "       "
+echo "       server {"
+echo "           listen 80;"
+echo "           server_name your-domain.com;"
+echo "           location / {"
+echo "               proxy_pass http://your_app;"
+echo "           }"
+echo "       }"

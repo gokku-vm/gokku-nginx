@@ -1,0 +1,25 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+APP_NAME="$2"
+DOMAIN="$3"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ] || [ -z "$DOMAIN" ]; then
+    echo "Usage: gokku nginx:add-domain <service> <app> <domain>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:add-domain nginx-lb api api.example.com"
+    echo "  gokku nginx:add-domain nginx-lb web www.example.com"
+    exit 1
+fi
+
+echo "-----> Adding domain '$DOMAIN' for app '$APP_NAME'"
+
+# Create app directory if it doesn't exist
+APP_DIR="/opt/gokku/apps/$APP_NAME"
+mkdir -p "$APP_DIR"
+
+# Write domain to CNAME file
+echo "$DOMAIN" > "$APP_DIR/CNAME"
+
+echo "-----> Domain '$DOMAIN' added for app '$APP_NAME'"
+echo "       CNAME file: $APP_DIR/CNAME"

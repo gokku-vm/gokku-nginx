@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Source Gokku helper functions
+if [ -f "/opt/gokku/scripts/plugin-helpers.sh" ]; then
+    source /opt/gokku/scripts/plugin-helpers.sh
+fi
+
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: $0 <service-name>"
+    exit 1
+fi
+
+echo "-----> Restarting nginx service: $SERVICE_NAME"
+
+# Check if container exists
+if ! container_exists "$SERVICE_NAME"; then
+    echo "Service '$SERVICE_NAME' not found"
+    echo "Create it with: gokku services:create nginx --name $SERVICE_NAME"
+    exit 1
+fi
+
+# Test configuration before restart
+echo "-----> Testing nginx configuration..."
+if ! docker exec "$SERVICE_NAME" nginx -t; then
+    echo "-----> Configuration test failed. Not restarting."
+    echo "Fix the configuration errors and try again."
+    exit 1
+fi
+
+# Restart the container
+echo "-----> Restarting nginx container..."
+if docker restart "$SERVICE_NAME"; then
+    echo "-----> Nginx container restarted successfully"
+else
+    echo "-----> Failed to restart nginx container"
+    exit 1
+fi
+
+# Wait for container to be ready
+echo "-----> Waiting for nginx to start..."
+wait_for_container "$SERVICE_NAME" 30
+
+# Verify nginx is running
+if ! container_is_running "$SERVICE_NAME"; then
+    echo "-----> Failed to start nginx after restart"
+    docker logs "$SERVICE_NAME"
+    exit 1
+fi
+
+# Test nginx configuration again
+echo "-----> Testing nginx configuration after restart..."
+if ! docker exec "$SERVICE_NAME" nginx -t; then
+    echo "-----> Configuration test failed after restart"
+    docker logs "$SERVICE_NAME"
+    exit 1
+fi
+
+echo "-----> Nginx service restarted successfully"
+echo "       Service: $SERVICE_NAME"
+echo "       Status: $(get_container_status "$SERVICE_NAME")"
+echo "       Port: $(get_container_port "$SERVICE_NAME" 80)"

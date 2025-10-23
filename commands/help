@@ -1,0 +1,49 @@
+#!/bin/bash
+cat << EOF
+Nginx plugin for Gokku
+
+Service Management:
+  gokku nginx:info <service>      Show service information
+  gokku nginx:logs <service>       Show service logs
+  gokku nginx:reload <service>     Reload nginx configuration
+  gokku nginx:status <service>     Show nginx status
+  gokku nginx:test <service>       Test nginx configuration
+  gokku nginx:config <service>      Show nginx configuration
+  gokku nginx:restart <service>    Restart nginx service
+
+Domain Management:
+  gokku nginx:add-domain <service> <app> <domain>     Add domain for app
+  gokku nginx:remove-domain <service> <app>           Remove domain for app
+  gokku nginx:list-domains <service>                  List all configured domains
+  gokku nginx:get-domain <service> <app>              Get domain for app
+
+Upstream Management:
+  gokku nginx:add-upstream <service> <app>            Add upstream for app
+  gokku nginx:update-upstream <service> <app> [type]  Update upstream with current containers
+  gokku nginx:remove-upstream <service> <app>         Remove upstream for app
+
+Examples:
+  # Service management
+  gokku nginx:info nginx-lb
+  gokku nginx:reload nginx-lb
+  gokku nginx:test nginx-lb
+
+  # Domain management
+  gokku nginx:add-domain nginx-lb api api.example.com
+  gokku nginx:list-domains nginx-lb
+  gokku nginx:remove-domain nginx-lb api
+
+  # Upstream management
+  gokku nginx:add-upstream nginx-lb api
+  gokku nginx:update-upstream nginx-lb api web
+  gokku nginx:remove-upstream nginx-lb api
+
+Configuration:
+  Service directory: /opt/gokku/services/<service>/
+  Main config: /opt/gokku/services/<service>/nginx.conf
+  Site configs: /opt/gokku/services/<service>/conf.d/
+  SSL certificates: /opt/gokku/services/<service>/ssl/
+  App domains: /opt/gokku/apps/<app>/CNAME
+
+For more information, visit: https://github.com/thadeu/gokku-nginx
+EOF

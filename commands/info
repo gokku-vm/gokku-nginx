@@ -1,0 +1,124 @@
+#!/bin/bash
+
+# Source Gokku helper functions
+if [ -f "/opt/gokku/scripts/plugin-helpers.sh" ]; then
+    source /opt/gokku/scripts/plugin-helpers.sh
+fi
+
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: $0 <service-name>"
+    exit 1
+fi
+
+echo "Nginx Service: $SERVICE_NAME"
+echo "================================"
+
+# Check if container exists
+if ! container_exists "$SERVICE_NAME"; then
+    echo "Status: NOT FOUND"
+    echo "The nginx service '$SERVICE_NAME' does not exist."
+    echo "Create it with: gokku services:create nginx --name $SERVICE_NAME"
+    exit 0
+fi
+
+# Check if container is running
+if ! container_is_running "$SERVICE_NAME"; then
+    echo "Status: STOPPED"
+    echo "The nginx service is not running."
+    echo "Start it with: docker start $SERVICE_NAME"
+    exit 0
+fi
+
+# Get service information
+STATUS=$(get_container_status "$SERVICE_NAME")
+PORT=$(get_container_port "$SERVICE_NAME" 80)
+UPTIME=$(get_container_uptime "$SERVICE_NAME")
+
+echo "Status: $STATUS"
+echo "Port: $PORT"
+echo "Uptime: $UPTIME"
+
+# Get service configuration
+SERVICE_DIR="/opt/gokku/services/$SERVICE_NAME"
+if [ -f "$SERVICE_DIR/service.conf" ]; then
+    CONFIG_DIR=$(grep -o '"config_dir":"[^"]*"' "$SERVICE_DIR/service.conf" | cut -d'"' -f4)
+    echo "Configuration: $CONFIG_DIR/nginx.conf"
+    echo "Site configs: $CONFIG_DIR/conf.d/"
+    echo "SSL directory: $CONFIG_DIR/ssl/"
+    echo "Logs directory: $CONFIG_DIR/logs/"
+else
+    echo "Configuration: $SERVICE_DIR/nginx.conf"
+fi
+
+# Show upstreams if any
+if [ -d "$SERVICE_DIR/conf.d" ]; then
+    echo ""
+    echo "Site Configurations:"
+    CONFIG_COUNT=0
+    for conf in "$SERVICE_DIR/conf.d"/*.conf; do
+        if [ -f "$conf" ]; then
+            CONFIG_NAME=$(basename "$conf" .conf)
+            if [ "$CONFIG_NAME" != "default" ]; then
+                echo "  $CONFIG_NAME.conf"
+                CONFIG_COUNT=$((CONFIG_COUNT + 1))
+            fi
+        fi
+    done
+
+    if [ $CONFIG_COUNT -eq 0 ]; then
+        echo "  No custom configurations found"
+        echo "  Add your upstream and server blocks to $SERVICE_DIR/conf.d/"
+    fi
+fi
+
+# Show configured domains
+echo ""
+echo "Configured Domains:"
+DOMAIN_COUNT=0
+for app_dir in /opt/gokku/apps/*; do
+    if [ -d "$app_dir" ]; then
+        app_name=$(basename "$app_dir")
+        cname_file="$app_dir/CNAME"
+
+        if [ -f "$cname_file" ]; then
+            domain=$(cat "$cname_file" | tr -d '\n')
+            echo "  $app_name → $domain"
+            DOMAIN_COUNT=$((DOMAIN_COUNT + 1))
+        fi
+    fi
+done
+
+if [ $DOMAIN_COUNT -eq 0 ]; then
+    echo "  No domains configured"
+    echo "  Configure domains with: gokku nginx:add-domain $SERVICE_NAME <app> <domain>"
+fi
+
+# Show SSL certificates if any
+if [ -d "$SERVICE_DIR/ssl" ] && [ "$(ls -A "$SERVICE_DIR/ssl" 2>/dev/null)" ]; then
+    echo ""
+    echo "SSL Certificates:"
+    for cert in "$SERVICE_DIR/ssl"/*.crt; do
+        if [ -f "$cert" ]; then
+            CERT_NAME=$(basename "$cert" .crt)
+            echo "  $CERT_NAME.crt"
+        fi
+    done
+else
+    echo ""
+    echo "SSL: No certificates configured"
+    echo "  Place certificates in: $SERVICE_DIR/ssl/"
+fi
+
+# Show nginx version
+echo ""
+echo "Nginx Version:"
+docker exec "$SERVICE_NAME" nginx -v 2>&1 | head -1
+
+# Show active connections (if nginx is running)
+if container_is_running "$SERVICE_NAME"; then
+    echo ""
+    echo "Active Connections:"
+    docker exec "$SERVICE_NAME" nginx -s status 2>/dev/null || echo "  Status not available"
+fi

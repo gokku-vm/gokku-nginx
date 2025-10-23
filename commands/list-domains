@@ -1,0 +1,32 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: gokku nginx:list-domains <service>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:list-domains nginx-lb"
+    exit 1
+fi
+
+echo "Configured domains:"
+echo "==================="
+
+# List all apps with CNAME files
+found_domains=false
+for app_dir in /opt/gokku/apps/*; do
+    if [ -d "$app_dir" ]; then
+        app_name=$(basename "$app_dir")
+        cname_file="$app_dir/CNAME"
+
+        if [ -f "$cname_file" ]; then
+            domain=$(cat "$cname_file" | tr -d '\n')
+            echo "  $app_name → $domain"
+            found_domains=true
+        fi
+    fi
+done
+
+if [ "$found_domains" = false ]; then
+    echo "  No domains configured"
+fi

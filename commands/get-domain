@@ -1,0 +1,21 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+APP_NAME="$2"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ]; then
+    echo "Usage: gokku nginx:get-domain <service> <app>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:get-domain nginx-lb api"
+    echo "  gokku nginx:get-domain nginx-lb web"
+    exit 1
+fi
+
+APP_DIR="/opt/gokku/apps/$APP_NAME"
+CNAME_FILE="$APP_DIR/CNAME"
+
+if [ -f "$CNAME_FILE" ]; then
+    cat "$CNAME_FILE" | tr -d '\n'
+else
+    echo "${APP_NAME}.local"
+fi

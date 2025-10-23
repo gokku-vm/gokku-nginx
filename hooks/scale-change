@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# Nginx plugin hook for scale changes
+# Called by Gokku when containers are scaled
+# Usage: scale-change <app-name> <process-type>
+
+APP_NAME="$1"
+PROCESS_TYPE="$2"
+
+if [ -z "$APP_NAME" ] || [ -z "$PROCESS_TYPE" ]; then
+    echo "Usage: scale-change <app-name> <process-type>"
+    exit 1
+fi
+
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Find nginx service
+find_nginx_service() {
+    local services_path="/opt/gokku/services"
+
+    if [ ! -d "$services_path" ]; then
+        return 1
+    fi
+
+    for service_dir in "$services_path"/*; do
+        if [ -d "$service_dir" ] && [ -f "$service_dir/nginx.conf" ]; then
+            basename "$service_dir"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+
+# Main execution
+main() {
+    # Find nginx service
+    local nginx_service
+    nginx_service=$(find_nginx_service)
+    if [ -z "$nginx_service" ]; then
+        # No nginx service, nothing to do
+        exit 0
+    fi
+
+    # Check if app has domain configured
+    local app_dir="/opt/gokku/apps/$APP_NAME"
+    local cname_file="$app_dir/CNAME"
+
+    if [ ! -f "$cname_file" ]; then
+        # No domain configured, nothing to do
+        exit 0
+    fi
+
+    # Update upstream with current container state
+    echo "-----> Updating nginx upstream for $APP_NAME $PROCESS_TYPE"
+    /opt/gokku/plugins/nginx/commands/update-upstream "$nginx_service" "$APP_NAME" "$PROCESS_TYPE"
+}
+
+# Run main function
+main

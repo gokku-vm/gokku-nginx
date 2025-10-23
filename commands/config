@@ -1,0 +1,92 @@
+#!/bin/bash
+
+# Source Gokku helper functions
+if [ -f "/opt/gokku/scripts/plugin-helpers.sh" ]; then
+    source /opt/gokku/scripts/plugin-helpers.sh
+fi
+
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: $0 <service-name>"
+    exit 1
+fi
+
+echo "Nginx configuration for $SERVICE_NAME:"
+echo "======================================"
+
+# Check if container exists
+if ! container_exists "$SERVICE_NAME"; then
+    echo "Service '$SERVICE_NAME' not found"
+    echo "Create it with: gokku services:create nginx --name $SERVICE_NAME"
+    exit 1
+fi
+
+SERVICE_DIR="/opt/gokku/services/$SERVICE_NAME"
+
+# Show main nginx configuration
+echo "Main nginx configuration:"
+echo "-------------------------"
+if [ -f "$SERVICE_DIR/nginx.conf" ]; then
+    cat "$SERVICE_DIR/nginx.conf"
+else
+    echo "Main configuration file not found: $SERVICE_DIR/nginx.conf"
+fi
+
+echo ""
+echo "Site configurations:"
+echo "--------------------"
+
+# Show site configurations
+if [ -d "$SERVICE_DIR/conf.d" ]; then
+    for conf in "$SERVICE_DIR/conf.d"/*.conf; do
+        if [ -f "$conf" ]; then
+            CONFIG_NAME=$(basename "$conf" .conf)
+            echo ""
+            echo "File: $conf"
+            echo "----------------------------------------"
+            cat "$conf"
+            echo ""
+        fi
+    done
+else
+    echo "No site configurations found in: $SERVICE_DIR/conf.d/"
+fi
+
+# Show SSL certificates info
+echo "SSL certificates:"
+echo "-----------------"
+if [ -d "$SERVICE_DIR/ssl" ] && [ "$(ls -A "$SERVICE_DIR/ssl" 2>/dev/null)" ]; then
+    for cert in "$SERVICE_DIR/ssl"/*.crt; do
+        if [ -f "$cert" ]; then
+            CERT_NAME=$(basename "$cert" .crt)
+            echo "Certificate: $cert"
+            if command -v openssl >/dev/null 2>&1; then
+                echo "Subject: $(openssl x509 -in "$cert" -noout -subject 2>/dev/null | sed 's/subject=//' || echo 'Unable to read certificate')"
+                echo "Valid until: $(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | sed 's/notAfter=//' || echo 'Unable to read certificate')"
+            fi
+            echo ""
+        fi
+    done
+else
+    echo "No SSL certificates found in: $SERVICE_DIR/ssl/"
+fi
+
+echo ""
+echo "Configuration files location:"
+echo "-----------------------------"
+echo "Main config: $SERVICE_DIR/nginx.conf"
+echo "Site configs: $SERVICE_DIR/conf.d/"
+echo "SSL certificates: $SERVICE_DIR/ssl/"
+echo "Logs: $SERVICE_DIR/logs/"
+
+echo ""
+echo "To edit configurations:"
+echo "  nano $SERVICE_DIR/nginx.conf"
+echo "  nano $SERVICE_DIR/conf.d/your-site.conf"
+echo ""
+echo "To test configuration:"
+echo "  gokku nginx:test $SERVICE_NAME"
+echo ""
+echo "To reload after changes:"
+echo "  gokku nginx:reload $SERVICE_NAME"

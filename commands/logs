@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# Source Gokku helper functions
+if [ -f "/opt/gokku/scripts/plugin-helpers.sh" ]; then
+    source /opt/gokku/scripts/plugin-helpers.sh
+fi
+
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: $0 <service-name>"
+    exit 1
+fi
+
+echo "Nginx logs for $SERVICE_NAME:"
+echo "============================="
+
+# Check if container exists
+if ! container_exists "$SERVICE_NAME"; then
+    echo "Service '$SERVICE_NAME' not found"
+    echo "Create it with: gokku services:create nginx --name $SERVICE_NAME"
+    exit 1
+fi
+
+# Check if container is running
+if ! container_is_running "$SERVICE_NAME"; then
+    echo "Service '$SERVICE_NAME' is not running"
+    echo "Start it with: docker start $SERVICE_NAME"
+    exit 1
+fi
+
+# Show recent logs
+echo "Recent nginx logs (last 100 lines):"
+echo "-----------------------------------"
+docker logs --tail 100 "$SERVICE_NAME"
+
+echo ""
+echo "Access logs:"
+echo "------------"
+SERVICE_DIR="/opt/gokku/services/$SERVICE_NAME"
+if [ -f "$SERVICE_DIR/logs/access.log" ]; then
+    tail -50 "$SERVICE_DIR/logs/access.log"
+else
+    echo "Access logs not available (check logs directory: $SERVICE_DIR/logs/)"
+fi
+
+echo ""
+echo "Error logs:"
+echo "-----------"
+if [ -f "$SERVICE_DIR/logs/error.log" ]; then
+    tail -50 "$SERVICE_DIR/logs/error.log"
+else
+    echo "Error logs not available (check logs directory: $SERVICE_DIR/logs/)"
+fi
+
+echo ""
+echo "To follow logs in real-time:"
+echo "  docker logs -f $SERVICE_NAME"
+echo ""
+echo "To view specific log files:"
+echo "  tail -f $SERVICE_DIR/logs/access.log"
+echo "  tail -f $SERVICE_DIR/logs/error.log"

@@ -1,0 +1,127 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+APP_NAME="$2"
+PROCESS_TYPE="$3"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ]; then
+    echo "Usage: gokku nginx:update-upstream <service> <app> [process-type]"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:update-upstream nginx-lb api"
+    echo "  gokku nginx:update-upstream nginx-lb api web"
+    exit 1
+fi
+
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+echo "-----> Updating upstream for app '$APP_NAME'"
+
+# Get app domain
+APP_DIR="/opt/gokku/apps/$APP_NAME"
+CNAME_FILE="$APP_DIR/CNAME"
+
+if [ -f "$CNAME_FILE" ]; then
+    DOMAIN=$(cat "$CNAME_FILE" | tr -d '\n')
+    echo "-----> Using domain: $DOMAIN"
+else
+    DOMAIN="${APP_NAME}.local"
+    echo "-----> No CNAME found, using default domain: $DOMAIN"
+fi
+
+# Determine upstream name and containers directory
+if [ -n "$PROCESS_TYPE" ]; then
+    UPSTREAM_NAME="${APP_NAME}-${PROCESS_TYPE}"
+    CONTAINERS_DIR="/opt/gokku/apps/$APP_NAME/containers/$PROCESS_TYPE"
+else
+    UPSTREAM_NAME="$APP_NAME"
+    CONTAINERS_DIR="/opt/gokku/apps/$APP_NAME/containers"
+fi
+
+# Get all running container ports
+PORTS=()
+if [ -d "$CONTAINERS_DIR" ]; then
+    if [ -n "$PROCESS_TYPE" ]; then
+        # Single process type
+        for json_file in "$CONTAINERS_DIR"/*.json; do
+            if [ -f "$json_file" ]; then
+                STATUS=$(jq -r '.status' "$json_file" 2>/dev/null)
+                if [ "$STATUS" = "running" ]; then
+                    PORT=$(jq -r '.host_port' "$json_file" 2>/dev/null)
+                    if [ "$PORT" != "null" ] && [ -n "$PORT" ]; then
+                        PORTS+=("$PORT")
+                    fi
+                fi
+            fi
+        done
+    else
+        # All process types
+        for process_dir in "$CONTAINERS_DIR"/*; do
+            if [ -d "$process_dir" ]; then
+                for json_file in "$process_dir"/*.json; do
+                    if [ -f "$json_file" ]; then
+                        STATUS=$(jq -r '.status' "$json_file" 2>/dev/null)
+                        if [ "$STATUS" = "running" ]; then
+                            PORT=$(jq -r '.host_port' "$json_file" 2>/dev/null)
+                            if [ "$PORT" != "null" ] && [ -n "$PORT" ]; then
+                                PORTS+=("$PORT")
+                            fi
+                        fi
+                    fi
+                done
+            fi
+        done
+    fi
+fi
+
+# Create upstream configuration
+CONFIG_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/${UPSTREAM_NAME}.conf"
+
+if [ ${#PORTS[@]} -eq 0 ]; then
+    # No running containers, remove config if exists
+    if [ -f "$CONFIG_FILE" ]; then
+        rm -f "$CONFIG_FILE"
+        echo "-----> Removed upstream configuration: $CONFIG_FILE"
+    else
+        echo "-----> No running containers found, nothing to update"
+    fi
+else
+    # Create conf.d directory if it doesn't exist
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+
+    # Generate upstream config with all running containers
+    cat > "$CONFIG_FILE" << EOF
+upstream $UPSTREAM_NAME {
+$(for port in "${PORTS[@]}"; do
+    echo "    server 127.0.0.1:$port;"
+done)
+}
+
+server {
+    listen 80;
+    server_name $DOMAIN;
+
+    location / {
+        proxy_pass http://$UPSTREAM_NAME;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+    echo "-----> Upstream configuration updated: $CONFIG_FILE"
+    echo "-----> Added ${#PORTS[@]} server(s) to upstream '$UPSTREAM_NAME'"
+fi
+
+# Reload nginx if container is running
+if container_is_running "$SERVICE_NAME"; then
+    echo "-----> Reloading nginx configuration"
+    docker exec "$SERVICE_NAME" nginx -s reload
+    echo "-----> Nginx configuration reloaded"
+else
+    echo "-----> Nginx container not running, configuration will be loaded on next start"
+fi
+
+echo "-----> Upstream '$UPSTREAM_NAME' updated for domain '$DOMAIN'"
