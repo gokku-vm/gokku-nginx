@@ -1,10 +1,10 @@
 #!/bin/bash
 SERVICE_NAME="$1"
 DOMAIN="$2"
-PATH="$3"
+LOCATION_PATH="$3"
 APP_NAME="$4"
 
-if [ -z "$SERVICE_NAME" ] || [ -z "$DOMAIN" ] || [ -z "$PATH" ] || [ -z "$APP_NAME" ]; then
+if [ -z "$SERVICE_NAME" ] || [ -z "$DOMAIN" ] || [ -z "$LOCATION_PATH" ] || [ -z "$APP_NAME" ]; then
     echo "Usage: gokku nginx:add-location <service> <domain> <path> <app>"
     echo ""
     echo "Examples:"
@@ -25,16 +25,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/functions.sh"
 
 # Normalize path (ensure it starts with / and ends with / if not root)
-if [ "$PATH" != "/" ]; then
-    if [[ ! "$PATH" =~ ^/ ]]; then
-        PATH="/$PATH"
+if [ "$LOCATION_PATH" != "/" ]; then
+    if [[ ! "$LOCATION_PATH" =~ ^/ ]]; then
+        LOCATION_PATH="/$LOCATION_PATH"
     fi
-    if [[ ! "$PATH" =~ /$ ]]; then
-        PATH="$PATH/"
+    if [[ ! "$LOCATION_PATH" =~ /$ ]]; then
+        LOCATION_PATH="$LOCATION_PATH/"
     fi
 fi
 
-echo "-----> Adding location '$PATH' for app '$APP_NAME' to domain '$DOMAIN'"
+echo "-----> Adding location '$LOCATION_PATH' for app '$APP_NAME' to domain '$DOMAIN'"
 
 # Determine upstream name
 UPSTREAM_NAME="$APP_NAME"
@@ -69,12 +69,12 @@ else
 fi
 
 # Add location to metadata
-metadata_add_location "$SERVICE_NAME" "$DOMAIN" "$PATH" "$UPSTREAM_NAME" "$APP_NAME"
+metadata_add_location "$SERVICE_NAME" "$DOMAIN" "$LOCATION_PATH" "$UPSTREAM_NAME" "$APP_NAME"
 
 # Generate server block
 nginx_generate_server_block "$SERVICE_NAME" "$DOMAIN"
 
-echo "-----> Location '$PATH' added for domain '$DOMAIN'"
+echo "-----> Location '$LOCATION_PATH' added for domain '$DOMAIN'"
 
 # Ensure container is running
 if ! ensure_nginx_running "$SERVICE_NAME"; then
@@ -102,5 +102,5 @@ else
     echo "-----> Warning: Container may not be running properly"
 fi
 
-echo "-----> Location '$PATH' successfully added"
+echo "-----> Location '$LOCATION_PATH' successfully added"
 
