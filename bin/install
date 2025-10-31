@@ -167,7 +167,7 @@ EOF
 
 # Set proper permissions
 # chown -R gokku:gokku "$SERVICE_DIR" 2>/dev/null || true
-chmod -R 755 "$SERVICE_DIR"
+# chmod -R 755 "$SERVICE_DIR"
 
 echo "-----> Nginx service installed successfully"
 echo "       Service: $SERVICE_NAME"
