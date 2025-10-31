@@ -11,6 +11,13 @@ if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ]; then
     exit 1
 fi
 
+# Source plugin helpers from Gokku repository https://github.com/thadeu/gokku/blob/main/scripts/plugin-helpers.sh
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
 echo "-----> Adding upstream for app '$APP_NAME'"
 
 # Get app domain
@@ -25,41 +32,22 @@ else
     echo "-----> No CNAME found, using default domain: $DOMAIN"
 fi
 
-# Get app base port
-APP_ENV_FILE="$APP_DIR/.env"
-if [ -f "$APP_ENV_FILE" ]; then
-    BASE_PORT=$(grep "^PORT=" "$APP_ENV_FILE" | cut -d= -f2 | head -1)
-    if [ -z "$BASE_PORT" ]; then
-        BASE_PORT=8080
-    fi
-else
-    BASE_PORT=8080
-fi
+# Get all running container ports using docker ps
+UPSTREAM_NAME="$APP_NAME"
+get_ports_by_name "$APP_NAME"
 
 # Create upstream configuration
-UPSTREAM_NAME="$APP_NAME"
 CONFIG_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/${UPSTREAM_NAME}.conf"
 
-cat > "$CONFIG_FILE" << EOF
-upstream $UPSTREAM_NAME {
-    server 127.0.0.1:$BASE_PORT;
-}
-
-server {
-    listen 80;
-    server_name $DOMAIN;
-
-    location / {
-        proxy_pass http://$UPSTREAM_NAME;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF
-
-echo "-----> Upstream configuration created: $CONFIG_FILE"
+if [ ${#PORTS[@]} -eq 0 ]; then
+    echo "-----> No running containers found for app '$APP_NAME'"
+    echo "-----> Cannot create upstream without running containers"
+    exit 1
+else
+    nginx_upstream_config "$CONFIG_FILE" "$UPSTREAM_NAME" "$DOMAIN"
+    echo "-----> Upstream configuration created: $CONFIG_FILE"
+    echo "-----> Added ${#PORTS[@]} server(s) to upstream '$UPSTREAM_NAME'"
+fi
 
 # Reload nginx if container is running
 if container_is_running "$SERVICE_NAME"; then

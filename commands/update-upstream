@@ -12,8 +12,12 @@ if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ]; then
     exit 1
 fi
 
-# Source plugin helpers
+# Source plugin helpers from Gokku repository https://github.com/thadeu/gokku/blob/main/scripts/plugin-helpers.sh
 source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
 
 echo "-----> Updating upstream for app '$APP_NAME'"
 
@@ -29,50 +33,15 @@ else
     echo "-----> No CNAME found, using default domain: $DOMAIN"
 fi
 
-# Determine upstream name and containers directory
+# Determine upstream name
 if [ -n "$PROCESS_TYPE" ]; then
     UPSTREAM_NAME="${APP_NAME}-${PROCESS_TYPE}"
-    CONTAINERS_DIR="/opt/gokku/apps/$APP_NAME/containers/$PROCESS_TYPE"
 else
     UPSTREAM_NAME="$APP_NAME"
-    CONTAINERS_DIR="/opt/gokku/apps/$APP_NAME/containers"
 fi
 
-# Get all running container ports
-PORTS=()
-if [ -d "$CONTAINERS_DIR" ]; then
-    if [ -n "$PROCESS_TYPE" ]; then
-        # Single process type
-        for json_file in "$CONTAINERS_DIR"/*.json; do
-            if [ -f "$json_file" ]; then
-                STATUS=$(jq -r '.status' "$json_file" 2>/dev/null)
-                if [ "$STATUS" = "running" ]; then
-                    PORT=$(jq -r '.host_port' "$json_file" 2>/dev/null)
-                    if [ "$PORT" != "null" ] && [ -n "$PORT" ]; then
-                        PORTS+=("$PORT")
-                    fi
-                fi
-            fi
-        done
-    else
-        # All process types
-        for process_dir in "$CONTAINERS_DIR"/*; do
-            if [ -d "$process_dir" ]; then
-                for json_file in "$process_dir"/*.json; do
-                    if [ -f "$json_file" ]; then
-                        STATUS=$(jq -r '.status' "$json_file" 2>/dev/null)
-                        if [ "$STATUS" = "running" ]; then
-                            PORT=$(jq -r '.host_port' "$json_file" 2>/dev/null)
-                            if [ "$PORT" != "null" ] && [ -n "$PORT" ]; then
-                                PORTS+=("$PORT")
-                            fi
-                        fi
-                    fi
-                done
-            fi
-        done
-    fi
-fi
+# Get all running container ports using docker ps
+get_ports_by_name "$APP_NAME"
 
 # Create upstream configuration
 CONFIG_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/${UPSTREAM_NAME}.conf"
@@ -86,31 +55,7 @@ if [ ${#PORTS[@]} -eq 0 ]; then
         echo "-----> No running containers found, nothing to update"
     fi
 else
-    # Create conf.d directory if it doesn't exist
-    mkdir -p "$(dirname "$CONFIG_FILE")"
-
-    # Generate upstream config with all running containers
-    cat > "$CONFIG_FILE" << EOF
-upstream $UPSTREAM_NAME {
-$(for port in "${PORTS[@]}"; do
-    echo "    server 127.0.0.1:$port;"
-done)
-}
-
-server {
-    listen 80;
-    server_name $DOMAIN;
-
-    location / {
-        proxy_pass http://$UPSTREAM_NAME;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOF
-
+    nginx_upstream_config "$CONFIG_FILE" "$UPSTREAM_NAME" "$DOMAIN"
     echo "-----> Upstream configuration updated: $CONFIG_FILE"
     echo "-----> Added ${#PORTS[@]} server(s) to upstream '$UPSTREAM_NAME'"
 fi
