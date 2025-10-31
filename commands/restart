@@ -57,7 +57,13 @@ if ! docker exec "$SERVICE_NAME" nginx -t; then
     exit 1
 fi
 
+# Check network mode
+NETWORK_MODE="bridge"
+if docker inspect "$SERVICE_NAME" 2>/dev/null | grep -q '"NetworkMode":"host"'; then
+    NETWORK_MODE="host"
+fi
+
 echo "-----> Nginx service restarted successfully"
 echo "       Service: $SERVICE_NAME"
 echo "       Status: $(get_container_status "$SERVICE_NAME")"
-echo "       Port: $(get_container_port "$SERVICE_NAME" 80)"
+echo "       Network: $NETWORK_MODE (nginx listens directly on host ports)"

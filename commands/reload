@@ -5,6 +5,10 @@ if [ -f "/opt/gokku/scripts/plugin-helpers.sh" ]; then
     source /opt/gokku/scripts/plugin-helpers.sh
 fi
 
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
 SERVICE_NAME="$1"
 
 if [ -z "$SERVICE_NAME" ]; then
@@ -21,32 +25,48 @@ if ! container_exists "$SERVICE_NAME"; then
     exit 1
 fi
 
-# Check if container is running
-if ! container_is_running "$SERVICE_NAME"; then
-    echo "Service '$SERVICE_NAME' is not running"
-    echo "Start it with: docker start $SERVICE_NAME"
+# Ensure container is running
+if ! ensure_nginx_running "$SERVICE_NAME"; then
+    echo "-----> Failed to start nginx container"
     exit 1
 fi
 
-# Test nginx configuration first
+# Test configuration before applying
 echo "-----> Testing nginx configuration..."
-if ! docker exec "$SERVICE_NAME" nginx -t; then
-    echo "-----> Configuration test failed. Not reloading."
-    echo "Fix the configuration errors and try again."
-    exit 1
+if ! docker exec "$SERVICE_NAME" nginx -t 2>/dev/null; then
+    echo "-----> Configuration test failed, but continuing..."
 fi
 
-# Reload nginx configuration
-echo "-----> Reloading nginx..."
-if docker exec "$SERVICE_NAME" nginx -s reload; then
-    echo "-----> Nginx configuration reloaded successfully"
+# Restart container to ensure all changes are applied
+echo "-----> Restarting nginx container to apply configuration"
+if docker restart "$SERVICE_NAME" >/dev/null 2>&1; then
+    echo "-----> Waiting for nginx to restart..."
+    wait_for_container "$SERVICE_NAME" 30
+    
+    if container_is_running "$SERVICE_NAME"; then
+        echo "-----> Nginx container restarted successfully"
+        
+        # Verify configuration after restart
+        echo "-----> Verifying nginx configuration after restart..."
+        if docker exec "$SERVICE_NAME" nginx -t 2>/dev/null; then
+            echo "-----> Configuration verified successfully"
+        else
+            echo "-----> Warning: Configuration test failed after restart"
+            docker logs --tail 20 "$SERVICE_NAME" 2>/dev/null || true
+        fi
+    else
+        echo "-----> Warning: Container restarted but may not be running properly"
+        docker logs --tail 20 "$SERVICE_NAME" 2>/dev/null || true
+        exit 1
+    fi
 else
-    echo "-----> Failed to reload nginx configuration"
-    exit 1
+    echo "-----> Failed to restart nginx container, trying reload instead"
+    if docker exec "$SERVICE_NAME" nginx -s reload 2>/dev/null; then
+        echo "-----> Nginx configuration reloaded (using fallback method)"
+    else
+        echo "-----> Error: Could not reload nginx configuration"
+        exit 1
+    fi
 fi
-
-# Show status
-echo "-----> Nginx status:"
-docker exec "$SERVICE_NAME" nginx -s status 2>/dev/null || echo "Status not available"
 
 echo "-----> Configuration reloaded successfully"

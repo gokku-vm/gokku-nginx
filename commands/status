@@ -66,11 +66,16 @@ echo ""
 echo "Container status:"
 echo "-----------------"
 STATUS=$(get_container_status "$SERVICE_NAME")
-PORT=$(get_container_port "$SERVICE_NAME" 80)
 UPTIME=$(get_container_uptime "$SERVICE_NAME")
 
+# Check network mode
+NETWORK_MODE="bridge"
+if docker inspect "$SERVICE_NAME" 2>/dev/null | grep -q '"NetworkMode":"host"'; then
+    NETWORK_MODE="host"
+fi
+
 echo "Status: $STATUS"
-echo "Port: $PORT"
+echo "Network: $NETWORK_MODE (nginx listens directly on host ports)"
 echo "Uptime: $UPTIME"
 
 echo ""

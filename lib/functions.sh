@@ -61,7 +61,33 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
-}
+    }
 EOF
+}
+
+# Ensure nginx container is running and up to date
+# Usage: ensure_nginx_running SERVICE_NAME
+ensure_nginx_running() {
+    local service_name="$1"
+    
+    if ! container_exists "$service_name"; then
+        echo "-----> Container $service_name does not exist"
+        return 1
+    fi
+    
+    if ! container_is_running "$service_name"; then
+        echo "-----> Starting nginx container: $service_name"
+        docker start "$service_name"
+        
+        echo "-----> Waiting for nginx to start..."
+        wait_for_container "$service_name" 30
+        
+        if ! container_is_running "$service_name"; then
+            echo "-----> Failed to start nginx container"
+            return 1
+        fi
+    fi
+    
+    return 0
 }
 

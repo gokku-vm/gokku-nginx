@@ -14,9 +14,6 @@ fi
 
 echo "-----> Installing nginx service: $SERVICE_NAME"
 
-# Get next available port starting from 80
-PORT=$(get_next_port 9000)
-
 # Create nginx service directory
 SERVICE_DIR="/opt/gokku/services/$SERVICE_NAME"
 mkdir -p "$SERVICE_DIR/conf.d"
@@ -119,11 +116,11 @@ if container_exists "$SERVICE_NAME"; then
     docker rm "$SERVICE_NAME" 2>/dev/null || true
 fi
 
-# Create the nginx container
+# Create the nginx container with host network
 docker run -d \
     --name "$SERVICE_NAME" \
     --restart always \
-    -p "$PORT:80" \
+    --network=host \
     -v "$SERVICE_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
     -v "$SERVICE_DIR/conf.d:/etc/nginx/conf.d:ro" \
     -v "$SERVICE_DIR/ssl:/etc/nginx/ssl:ro" \
@@ -154,7 +151,7 @@ cat > "$SERVICE_DIR/service.conf" << EOF
 {
     "service_name": "$SERVICE_NAME",
     "service_type": "nginx",
-    "port": $PORT,
+    "network_mode": "host",
     "config_dir": "$SERVICE_DIR",
     "nginx_conf": "$SERVICE_DIR/nginx.conf",
     "conf_d_dir": "$SERVICE_DIR/conf.d",
@@ -171,13 +168,13 @@ EOF
 
 echo "-----> Nginx service installed successfully"
 echo "       Service: $SERVICE_NAME"
-echo "       Port: $PORT"
+echo "       Network: host (direct access to host network)"
 echo "       Configuration: $SERVICE_DIR/nginx.conf"
 echo "       Site configs: $SERVICE_DIR/conf.d/"
 echo ""
 echo "-----> Next steps:"
 echo "       1. Configure your upstream servers in $SERVICE_DIR/conf.d/"
-echo "       2. Add server blocks for your domains"
+echo "       2. Add server blocks for your domains (nginx listens on port 80 by default)"
 echo "       3. Run 'gokku nginx:reload $SERVICE_NAME' to apply changes"
 echo ""
 echo "-----> Example configuration:"
