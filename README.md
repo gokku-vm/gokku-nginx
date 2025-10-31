@@ -72,14 +72,14 @@ Manage multiple routes/paths on the same domain:
 
 ```bash
 # Add a location (path) to a domain pointing to an app
-gokku nginx:add-location nginx-lb api.example.com /users user-service
-gokku nginx:add-location nginx-lb api.example.com /orders order-service
+gokku nginx:add-location nginx-lb user-service /users api.example.com
+gokku nginx:add-location nginx-lb order-service /orders api.example.com
 
 # List all locations for a domain
 gokku nginx:list-locations nginx-lb api.example.com
 
 # Remove a location
-gokku nginx:remove-location nginx-lb api.example.com /users
+gokku nginx:remove-location nginx-lb user-service /users api.example.com
 ```
 
 **Use Cases:**
@@ -294,9 +294,9 @@ gokku nginx:add-upstream nginx-lb order-service
 gokku nginx:add-upstream nginx-lb payment-service
 
 # 3. Add routes for microservices
-gokku nginx:add-location nginx-lb api.example.com /users user-service
-gokku nginx:add-location nginx-lb api.example.com /orders order-service
-gokku nginx:add-location nginx-lb api.example.com /payments payment-service
+gokku nginx:add-location nginx-lb user-service /users api.example.com
+gokku nginx:add-location nginx-lb order-service /orders api.example.com
+gokku nginx:add-location nginx-lb payment-service /payments api.example.com
 
 # 4. List all routes
 gokku nginx:list-locations nginx-lb api.example.com
@@ -352,9 +352,9 @@ gokku nginx:add-domain nginx-lb api api.example.com
 gokku nginx:add-upstream nginx-lb api
 
 # Add microservices routes
-gokku nginx:add-location nginx-lb api.example.com /users user-service
-gokku nginx:add-location nginx-lb api.example.com /orders order-service
-gokku nginx:add-location nginx-lb api.example.com /payments payment-service
+gokku nginx:add-location nginx-lb user-service /users api.example.com
+gokku nginx:add-location nginx-lb order-service /orders api.example.com
+gokku nginx:add-location nginx-lb payment-service /payments api.example.com
 ```
 
 This creates:
@@ -422,9 +422,9 @@ Route different API versions to different apps:
 gokku nginx:add-domain nginx-lb api api.example.com
 
 # Add API versions
-gokku nginx:add-location nginx-lb api.example.com /v1 api-v1
-gokku nginx:add-location nginx-lb api.example.com /v2 api-v2
-gokku nginx:add-location nginx-lb api.example.com /admin admin-app
+gokku nginx:add-location nginx-lb api-v1 /v1 api.example.com
+gokku nginx:add-location nginx-lb api-v2 /v2 api.example.com
+gokku nginx:add-location nginx-lb admin-app /admin api.example.com
 ```
 
 This routes:
