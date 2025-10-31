@@ -36,7 +36,8 @@ get_ports_by_name() {
 # Returns: 0 if host network, 1 if bridge network
 is_host_network() {
     local service_name="$1"
-    if docker inspect "$service_name" 2>/dev/null | grep -q '"NetworkMode":"host"'; then
+    networkMode=$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$service_name" 2>/dev/null)
+    if [ "$networkMode" = "host" ]; then
         return 0
     fi
     return 1
