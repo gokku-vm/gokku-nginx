@@ -46,7 +46,7 @@ nginx_upstream_config() {
     cat > "$config_file" << EOF
 upstream $upstream_name {
 $(for port in "${PORTS[@]}"; do
-    echo "    server 127.0.0.1:$port;"
+    echo "    server $upstream_name:$port;"
 done)
 }
 
