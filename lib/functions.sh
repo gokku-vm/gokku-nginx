@@ -277,6 +277,9 @@ generate_locations_block() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 0;
+        proxy_send_timeout 0;
+        proxy_read_timeout 0;
     }
 
 EOF
@@ -362,7 +365,7 @@ server {
     # SSL configuration
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
+    ssl_session_timeout 30m;
     
     # Security headers
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
@@ -423,8 +426,11 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 0;
+        proxy_send_timeout 0;
+        proxy_read_timeout 0;
     }
-    }
+}
 EOF
 }
 
