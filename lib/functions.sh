@@ -31,21 +31,44 @@ get_ports_by_name() {
     fi
 }
 
+# Check if nginx container is in host network mode
+# Usage: is_host_network SERVICE_NAME
+# Returns: 0 if host network, 1 if bridge network
+is_host_network() {
+    local service_name="$1"
+    if docker inspect "$service_name" 2>/dev/null | grep -q '"NetworkMode":"host"'; then
+        return 0
+    fi
+    return 1
+}
+
 # Write nginx upstream configuration file (upstream only)
-# Usage: nginx_upstream_only UPSTREAM_FILE UPSTREAM_NAME
+# Usage: nginx_upstream_only UPSTREAM_FILE UPSTREAM_NAME [SERVICE_NAME]
 # Expects: PORTS array to be populated with ports
+# If SERVICE_NAME is provided and nginx is in host network, uses 127.0.0.1:PORT
 nginx_upstream_only() {
     local upstream_file="$1"
     local upstream_name="$2"
+    local service_name="$3"
     
     # Create directory if it doesn't exist
     mkdir -p "$(dirname "$upstream_file")"
+    
+    # Determine server address based on network mode
+    local server_addr
+    if [ -n "$service_name" ] && is_host_network "$service_name"; then
+        # Host network mode: use localhost with host port
+        server_addr="127.0.0.1"
+    else
+        # Bridge network mode: use container name (will be resolved at runtime)
+        server_addr="$upstream_name"
+    fi
     
     # Generate upstream config with all running containers
     cat > "$upstream_file" << EOF
 upstream $upstream_name {
 $(for port in "${PORTS[@]}"; do
-    echo "    server $upstream_name:$port;"
+    echo "    server $server_addr:$port;"
 done)
 }
 EOF

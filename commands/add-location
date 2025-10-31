@@ -58,7 +58,7 @@ upstream $UPSTREAM_NAME {
 }
 EOF
     else
-        nginx_upstream_only "$UPSTREAM_FILE" "$UPSTREAM_NAME"
+        nginx_upstream_only "$UPSTREAM_FILE" "$UPSTREAM_NAME" "$SERVICE_NAME"
         echo "-----> Upstream created with ${#PORTS[@]} server(s)"
     fi
     
@@ -84,8 +84,10 @@ fi
 
 # Test configuration before applying
 echo "-----> Testing nginx configuration..."
-if ! docker exec "$SERVICE_NAME" nginx -t 2>/dev/null; then
-    echo "-----> Configuration test failed, but continuing..."
+if ! docker exec "$SERVICE_NAME" nginx -t; then
+    echo "-----> Configuration test failed"
+    echo "-----> Fix configuration errors before continuing"
+    exit 1
 fi
 
 # Reload nginx configuration

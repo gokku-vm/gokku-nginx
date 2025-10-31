@@ -33,8 +33,10 @@ fi
 
 # Test configuration before applying
 echo "-----> Testing nginx configuration..."
-if ! docker exec "$SERVICE_NAME" nginx -t 2>/dev/null; then
-    echo "-----> Configuration test failed, but continuing..."
+if ! docker exec "$SERVICE_NAME" nginx -t; then
+    echo "-----> Configuration test failed"
+    echo "-----> Fix configuration errors before continuing"
+    exit 1
 fi
 
 # Restart container to ensure all changes are applied
@@ -48,7 +50,7 @@ if docker restart "$SERVICE_NAME" >/dev/null 2>&1; then
         
         # Verify configuration after restart
         echo "-----> Verifying nginx configuration after restart..."
-        if docker exec "$SERVICE_NAME" nginx -t 2>/dev/null; then
+        if docker exec "$SERVICE_NAME" nginx -t; then
             echo "-----> Configuration verified successfully"
         else
             echo "-----> Warning: Configuration test failed after restart"
