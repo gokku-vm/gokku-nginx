@@ -9,24 +9,41 @@ if [ -z "$SERVICE_NAME" ]; then
     exit 1
 fi
 
-echo "Configured domains:"
-echo "==================="
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
 
-# List all apps with CNAME files
-found_domains=false
-for app_dir in /opt/gokku/apps/*; do
-    if [ -d "$app_dir" ]; then
-        app_name=$(basename "$app_dir")
-        cname_file="$app_dir/CNAME"
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
 
-        if [ -f "$cname_file" ]; then
-            domain=$(cat "$cname_file" | tr -d '\n')
-            echo "  $app_name → $domain"
-            found_domains=true
-        fi
-    fi
-done
+echo "Configured domains for service '$SERVICE_NAME':"
+echo "=============================================="
 
-if [ "$found_domains" = false ]; then
+load_metadata "$SERVICE_NAME"
+
+# Get all domains from metadata
+domains=$(echo "$METADATA" | jq -r ".domains | keys[]" 2>/dev/null)
+
+if [ -z "$domains" ]; then
     echo "  No domains configured"
+    exit 0
 fi
+
+domain_count=0
+while IFS= read -r domain; do
+    if [ -n "$domain" ]; then
+        locations_count=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations | length" 2>/dev/null)
+        locations_count=${locations_count:-0}
+        
+        if [ "$locations_count" = "null" ] || [ -z "$locations_count" ]; then
+            locations_count=0
+        fi
+        
+        echo "  $domain (${locations_count} location(s))"
+        domain_count=$((domain_count + 1))
+    fi
+done <<< "$domains"
+
+echo ""
+echo "Total: $domain_count domain(s)"
+echo ""

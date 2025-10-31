@@ -2,10 +2,11 @@
 SERVICE_NAME="$1"
 DOMAIN="$2"
 
-if [ -z "$SERVICE_NAME" ] || [ -z "$DOMAIN" ]; then
-    echo "Usage: gokku nginx:list-locations <service> <domain>"
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: gokku nginx:list-locations <service> [domain]"
     echo ""
     echo "Examples:"
+    echo "  gokku nginx:list-locations nginx-lb"
     echo "  gokku nginx:list-locations nginx-lb api.example.com"
     exit 1
 fi
@@ -17,29 +18,79 @@ source /opt/gokku/scripts/plugin-helpers.sh
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/functions.sh"
 
-echo "Locations for domain '$DOMAIN':"
-echo "================================"
-
 load_metadata "$SERVICE_NAME"
 
-# Get locations for this domain
-locations=$(echo "$METADATA" | jq -r ".domains[\"$DOMAIN\"].locations[]? // []" 2>/dev/null)
-
-if [ -z "$locations" ] || [ "$locations" = "null" ]; then
-    echo "No locations configured for domain '$DOMAIN'"
-    exit 0
+if [ -n "$DOMAIN" ]; then
+    # List locations for specific domain
+    echo "Locations for domain '$DOMAIN':"
+    echo "================================"
+    
+    # Get locations for this domain
+    locations=$(echo "$METADATA" | jq -r ".domains[\"$DOMAIN\"].locations[]? // []" 2>/dev/null)
+    
+    if [ -z "$locations" ] || [ "$locations" = "null" ]; then
+        echo "No locations configured for domain '$DOMAIN'"
+        exit 0
+    fi
+    
+    # Count locations
+    count=$(echo "$METADATA" | jq ".domains[\"$DOMAIN\"].locations | length" 2>/dev/null)
+    echo ""
+    echo "Found $count location(s):"
+    echo ""
+    
+    # List each location
+    echo "$METADATA" | jq -r ".domains[\"$DOMAIN\"].locations[] | \"\(.path) -> app: \(.app) (upstream: \(.upstream))\"" 2>/dev/null | while IFS= read -r line; do
+        echo "  $line"
+    done
+    
+    echo ""
+else
+    # List all locations for all domains
+    echo "All locations for service '$SERVICE_NAME':"
+    echo "=========================================="
+    
+    # Get all domains
+    domains=$(echo "$METADATA" | jq -r ".domains | keys[]" 2>/dev/null)
+    
+    if [ -z "$domains" ]; then
+        echo "No locations configured"
+        exit 0
+    fi
+    
+    total_locations=0
+    found_any=false
+    
+    # Iterate through each domain
+    while IFS= read -r domain; do
+        if [ -n "$domain" ]; then
+            locations_count=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations | length" 2>/dev/null)
+            
+            if [ -n "$locations_count" ] && [ "$locations_count" != "null" ] && [ "$locations_count" != "0" ]; then
+                if [ "$found_any" = false ]; then
+                    echo ""
+                    found_any=true
+                fi
+                
+                echo "Domain: $domain"
+                echo "  Locations ($locations_count):"
+                
+                echo "$METADATA" | jq -r ".domains[\"$domain\"].locations[] | \"    \(.path) -> app: \(.app) (upstream: \(.upstream))\"" 2>/dev/null | while IFS= read -r line; do
+                    echo "$line"
+                done
+                
+                echo ""
+                total_locations=$((total_locations + locations_count))
+            fi
+        fi
+    done <<< "$domains"
+    
+    if [ "$found_any" = false ]; then
+        echo "No locations configured"
+    else
+        echo "Total: $total_locations location(s) across domains"
+    fi
+    
+    echo ""
 fi
-
-# Count locations
-count=$(echo "$METADATA" | jq ".domains[\"$DOMAIN\"].locations | length" 2>/dev/null)
-echo ""
-echo "Found $count location(s):"
-echo ""
-
-# List each location
-echo "$METADATA" | jq -r ".domains[\"$DOMAIN\"].locations[] | \"\(.path) -> app: \(.app) (upstream: \(.upstream))\"" 2>/dev/null | while IFS= read -r line; do
-    echo "  $line"
-done
-
-echo ""
 
