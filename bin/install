@@ -109,15 +109,24 @@ if container_exists "$SERVICE_NAME"; then
 fi
 
 # Create the nginx container with host network
-docker run -d \
-    --name "$SERVICE_NAME" \
+# Mount Let's Encrypt plugin directory if it exists (for SSL certificate symlinks)
+docker_cmd="docker run -d \
+    --name \"$SERVICE_NAME\" \
     --restart always \
     --network=host \
-    -v "$SERVICE_DIR/nginx.conf:/etc/nginx/nginx.conf:ro" \
-    -v "$SERVICE_DIR/conf.d:/etc/nginx/conf.d:ro" \
-    -v "$SERVICE_DIR/ssl:/etc/nginx/ssl:ro" \
-    -v "$SERVICE_DIR/logs:/var/log/nginx" \
-    nginx:alpine
+    -v \"$SERVICE_DIR/nginx.conf:/etc/nginx/nginx.conf:ro\" \
+    -v \"$SERVICE_DIR/conf.d:/etc/nginx/conf.d:ro\" \
+    -v \"$SERVICE_DIR/ssl:/etc/nginx/ssl:ro\" \
+    -v \"$SERVICE_DIR/logs:/var/log/nginx\""
+
+# Add Let's Encrypt plugin volume if it exists
+if [ -d "/opt/gokku/plugins/letsencrypt" ]; then
+    docker_cmd="$docker_cmd -v \"/opt/gokku/plugins/letsencrypt:/opt/gokku/plugins/letsencrypt:ro\""
+fi
+
+docker_cmd="$docker_cmd nginx:alpine"
+
+eval "$docker_cmd"
 
 # Wait for container to be ready
 echo "-----> Waiting for nginx to start..."

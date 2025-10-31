@@ -195,6 +195,20 @@ check_ssl_certificates() {
     fi
     
     # Check for domain-specific files (domain.crt, domain.key)
+    # These are symlinks created by Let's Encrypt plugin pointing to live/ directory:
+    # ln -sf "$PLUGIN_DIR/live/$DOMAIN/fullchain.pem" "$NGINX_SSL_DIR/$DOMAIN.crt"
+    # ln -sf "$PLUGIN_DIR/live/$DOMAIN/privkey.pem" "$NGINX_SSL_DIR/$DOMAIN.key"
+    # The live/ directory contains symlinks to archive/ with current certificate versions
+    # Verify that symlinks exist and can be resolved (check if target exists)
+    if [ -L "$ssl_dir/${domain}.crt" ] && [ -L "$ssl_dir/${domain}.key" ]; then
+        # Check if symlink targets are readable (will fail if target doesn't exist)
+        if [ -r "$ssl_dir/${domain}.crt" ] && [ -r "$ssl_dir/${domain}.key" ]; then
+            SSL_CERT_FILE="$ssl_dir/${domain}.crt"
+            SSL_KEY_FILE="$ssl_dir/${domain}.key"
+            return 0
+        fi
+    fi
+    # Fallback: check if files exist (regular files or symlinks)
     if [ -f "$ssl_dir/${domain}.crt" ] && [ -f "$ssl_dir/${domain}.key" ]; then
         SSL_CERT_FILE="$ssl_dir/${domain}.crt"
         SSL_KEY_FILE="$ssl_dir/${domain}.key"
@@ -301,7 +315,11 @@ nginx_generate_server_block() {
         # Convert absolute host paths to container paths
         # Host: /opt/gokku/services/nginx-lb/ssl/domain.crt
         # Container: /etc/nginx/ssl/domain.crt
-        # Volume mount: -v "$SERVICE_DIR/ssl:/etc/nginx/ssl:ro"
+        # Volume mounts:
+        #   -v "$SERVICE_DIR/ssl:/etc/nginx/ssl:ro"
+        #   -v "/opt/gokku/plugins/letsencrypt:/opt/gokku/plugins/letsencrypt:ro"
+        # Plugin creates symlinks: $NGINX_SSL_DIR/$DOMAIN.crt -> $PLUGIN_DIR/live/$DOMAIN/fullchain.pem
+        # The live/ directory contains symlinks to archive/ with current certificate versions
         local service_base_path="/opt/gokku/services/$service_name"
         local ssl_cert_container_path="${ssl_cert_file#$service_base_path/}"
         local ssl_key_container_path="${ssl_key_file#$service_base_path/}"
@@ -320,7 +338,8 @@ server {
 
 # HTTPS server block
 server {
-    listen 443 ssl http2;
+    listen 443 ssl;
+    http2 on;
     server_name $domain;
     
     ssl_certificate /etc/nginx/$ssl_cert_container_path;
@@ -328,8 +347,6 @@ server {
     
     # SSL configuration
     ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 10m;
     
