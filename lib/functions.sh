@@ -183,35 +183,43 @@ check_ssl_certificates() {
     local service_name="$1"
     local domain="$2"
     local ssl_dir="/opt/gokku/services/$service_name/ssl"
+    local letsencrypt_live="/opt/gokku/plugins/letsencrypt/live/${domain}"
     
     SSL_CERT_FILE=""
     SSL_KEY_FILE=""
     
-    # Check for Let's Encrypt format (fullchain.pem, privkey.pem)
-    if [ -f "$ssl_dir/${domain}/fullchain.pem" ] && [ -f "$ssl_dir/${domain}/privkey.pem" ]; then
-        SSL_CERT_FILE="$ssl_dir/${domain}/fullchain.pem"
-        SSL_KEY_FILE="$ssl_dir/${domain}/privkey.pem"
-        return 0
+    # First, check directly in Let's Encrypt live directory (most reliable)
+    if [ -f "${letsencrypt_live}/fullchain.pem" ] && [ -f "${letsencrypt_live}/privkey.pem" ]; then
+        # Verify symlinks can be resolved (they point to archive/)
+        if [ -r "${letsencrypt_live}/fullchain.pem" ] && [ -r "${letsencrypt_live}/privkey.pem" ]; then
+            SSL_CERT_FILE="${letsencrypt_live}/fullchain.pem"
+            SSL_KEY_FILE="${letsencrypt_live}/privkey.pem"
+            return 0
+        fi
     fi
     
-    # Check for domain-specific files (domain.crt, domain.key)
-    # These are symlinks created by Let's Encrypt plugin pointing to live/ directory:
-    # ln -sf "$PLUGIN_DIR/live/$DOMAIN/fullchain.pem" "$NGINX_SSL_DIR/$DOMAIN.crt"
-    # ln -sf "$PLUGIN_DIR/live/$DOMAIN/privkey.pem" "$NGINX_SSL_DIR/$DOMAIN.key"
-    # The live/ directory contains symlinks to archive/ with current certificate versions
-    # Verify that symlinks exist and can be resolved (check if target exists)
+    # Check for symlinks in ssl directory (created by plugin)
+    # Plugin creates: $NGINX_SSL_DIR/$DOMAIN.crt -> $PLUGIN_DIR/live/$DOMAIN/fullchain.pem
     if [ -L "$ssl_dir/${domain}.crt" ] && [ -L "$ssl_dir/${domain}.key" ]; then
-        # Check if symlink targets are readable (will fail if target doesn't exist)
+        # Verify symlink targets are readable (will fail if target doesn't exist)
         if [ -r "$ssl_dir/${domain}.crt" ] && [ -r "$ssl_dir/${domain}.key" ]; then
             SSL_CERT_FILE="$ssl_dir/${domain}.crt"
             SSL_KEY_FILE="$ssl_dir/${domain}.key"
             return 0
         fi
     fi
-    # Fallback: check if files exist (regular files or symlinks)
+    
+    # Fallback: check if .crt/.key files exist (regular files or symlinks)
     if [ -f "$ssl_dir/${domain}.crt" ] && [ -f "$ssl_dir/${domain}.key" ]; then
         SSL_CERT_FILE="$ssl_dir/${domain}.crt"
         SSL_KEY_FILE="$ssl_dir/${domain}.key"
+        return 0
+    fi
+    
+    # Check for Let's Encrypt format in subdirectory (fullchain.pem, privkey.pem)
+    if [ -f "$ssl_dir/${domain}/fullchain.pem" ] && [ -f "$ssl_dir/${domain}/privkey.pem" ]; then
+        SSL_CERT_FILE="$ssl_dir/${domain}/fullchain.pem"
+        SSL_KEY_FILE="$ssl_dir/${domain}/privkey.pem"
         return 0
     fi
     
@@ -313,37 +321,43 @@ nginx_generate_server_block() {
     # Generate server block(s)
     if [ "$has_ssl" -eq 1 ]; then
         # Convert absolute host paths to container paths
-        # Host: /opt/gokku/services/nginx-lb/ssl/domain.crt
-        # Container: /etc/nginx/ssl/domain.crt
         # Volume mounts:
         #   -v "$SERVICE_DIR/ssl:/etc/nginx/ssl:ro"
         #   -v "/opt/gokku/plugins/letsencrypt:/opt/gokku/plugins/letsencrypt:ro"
         # Plugin creates symlinks: $NGINX_SSL_DIR/$DOMAIN.crt -> $PLUGIN_DIR/live/$DOMAIN/fullchain.pem
         # The live/ directory contains symlinks to archive/ with current certificate versions
-        local service_base_path="/opt/gokku/services/$service_name"
-        local ssl_cert_container_path="${ssl_cert_file#$service_base_path/}"
-        local ssl_key_container_path="${ssl_key_file#$service_base_path/}"
+        local ssl_cert_container_path=""
+        local ssl_key_container_path=""
         
-        # SSL enabled - create HTTP redirect + HTTPS block
+        # Check if files are from Let's Encrypt plugin directory
+        if [[ "$ssl_cert_file" == /opt/gokku/plugins/letsencrypt/* ]]; then
+            # Files from plugin directory: use same path in container (volume mount preserves path)
+            ssl_cert_container_path="$ssl_cert_file"
+            ssl_key_container_path="$ssl_key_file"
+        elif [[ "$ssl_cert_file" == /opt/gokku/services/* ]]; then
+            # Files from service directory: convert to /etc/nginx/... (volume mount maps service dir)
+            local service_base_path="/opt/gokku/services/$service_name"
+            local cert_rel_path="${ssl_cert_file#$service_base_path/}"
+            local key_rel_path="${ssl_key_file#$service_base_path/}"
+            ssl_cert_container_path="/etc/nginx/$cert_rel_path"
+            ssl_key_container_path="/etc/nginx/$key_rel_path"
+        else
+            # Fallback: use file path as-is
+            ssl_cert_container_path="$ssl_cert_file"
+            ssl_key_container_path="$ssl_key_file"
+        fi
+        
+        # SSL enabled - HTTPS only (port 80 left free for Let's Encrypt HTTP-01 challenge)
+        # Modern browsers will upgrade to HTTPS automatically via HSTS
         cat > "$server_file" << EOF
-# HTTP redirect to HTTPS
-server {
-    listen 80;
-    server_name $domain;
-    
-    location / {
-        return 301 https://\$server_name\$request_uri;
-    }
-}
-
 # HTTPS server block
 server {
     listen 443 ssl;
     http2 on;
     server_name $domain;
     
-    ssl_certificate /etc/nginx/$ssl_cert_container_path;
-    ssl_certificate_key /etc/nginx/$ssl_key_container_path;
+    ssl_certificate $ssl_cert_container_path;
+    ssl_certificate_key $ssl_key_container_path;
     
     # SSL configuration
     ssl_protocols TLSv1.2 TLSv1.3;
