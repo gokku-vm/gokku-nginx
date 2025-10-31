@@ -151,6 +151,92 @@ metadata_remove_location() {
     save_metadata "$service_name"
 }
 
+# Check if SSL certificates exist for a domain
+# Usage: check_ssl_certificates SERVICE_NAME DOMAIN
+# Returns: 0 if SSL exists, 1 if not
+# Sets: SSL_CERT_FILE and SSL_KEY_FILE if found
+check_ssl_certificates() {
+    local service_name="$1"
+    local domain="$2"
+    local ssl_dir="/opt/gokku/services/$service_name/ssl"
+    
+    SSL_CERT_FILE=""
+    SSL_KEY_FILE=""
+    
+    # Check for Let's Encrypt format (fullchain.pem, privkey.pem)
+    if [ -f "$ssl_dir/${domain}/fullchain.pem" ] && [ -f "$ssl_dir/${domain}/privkey.pem" ]; then
+        SSL_CERT_FILE="$ssl_dir/${domain}/fullchain.pem"
+        SSL_KEY_FILE="$ssl_dir/${domain}/privkey.pem"
+        return 0
+    fi
+    
+    # Check for domain-specific files (domain.crt, domain.key)
+    if [ -f "$ssl_dir/${domain}.crt" ] && [ -f "$ssl_dir/${domain}.key" ]; then
+        SSL_CERT_FILE="$ssl_dir/${domain}.crt"
+        SSL_KEY_FILE="$ssl_dir/${domain}.key"
+        return 0
+    fi
+    
+    # Check for Let's Encrypt in ssl directory root (links from plugin)
+    if [ -f "$ssl_dir/${domain}-fullchain.pem" ] && [ -f "$ssl_dir/${domain}-privkey.pem" ]; then
+        SSL_CERT_FILE="$ssl_dir/${domain}-fullchain.pem"
+        SSL_KEY_FILE="$ssl_dir/${domain}-privkey.pem"
+        return 0
+    fi
+    
+    # Check for any .crt and .key files matching domain pattern
+    if [ -d "$ssl_dir" ]; then
+        for cert_file in "$ssl_dir"/*.crt "$ssl_dir"/*.pem; do
+            # Skip if glob didn't match any files
+            [ ! -f "$cert_file" ] && continue
+            
+            local cert_basename=$(basename "$cert_file" .crt)
+            cert_basename=$(basename "$cert_basename" .pem)
+            
+            # Try to match domain in filename
+            if [[ "$cert_basename" == *"$domain"* ]] || [[ "$cert_basename" == "fullchain" ]] || [[ "$cert_basename" == "${domain}-fullchain" ]]; then
+                local key_file=""
+                if [[ "$cert_file" == *.crt ]]; then
+                    key_file="${cert_file%.crt}.key"
+                elif [[ "$cert_file" == *fullchain.pem ]]; then
+                    key_file="${cert_file/fullchain.pem/privkey.pem}"
+                fi
+                
+                if [ -f "$key_file" ]; then
+                    SSL_CERT_FILE="$cert_file"
+                    SSL_KEY_FILE="$key_file"
+                    return 0
+                fi
+            fi
+        done
+    fi
+    
+    return 1
+}
+
+# Generate locations block
+# Usage: generate_locations_block OUTPUT_FILE LOCATIONS_JSON
+generate_locations_block() {
+    local output_file="$1"
+    local locations_json="$2"
+    
+    echo "$locations_json" | while IFS= read -r location_obj; do
+        local path=$(echo "$location_obj" | jq -r '.path')
+        local upstream=$(echo "$location_obj" | jq -r '.upstream')
+        
+        cat >> "$output_file" << EOF
+    location $path {
+        proxy_pass http://$upstream;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+EOF
+    done
+}
+
 # Generate server block from metadata
 # Usage: nginx_generate_server_block SERVICE_NAME DOMAIN
 nginx_generate_server_block() {
@@ -172,35 +258,85 @@ nginx_generate_server_block() {
     # Create directory if it doesn't exist
     mkdir -p "$(dirname "$server_file")"
     
-    # Generate server block header
-    cat > "$server_file" << EOF
+    # Check if SSL certificates exist
+    local has_ssl=0
+    local ssl_cert_file=""
+    local ssl_key_file=""
+    
+    if check_ssl_certificates "$service_name" "$domain"; then
+        has_ssl=1
+        ssl_cert_file="$SSL_CERT_FILE"
+        ssl_key_file="$SSL_KEY_FILE"
+    fi
+    
+    # Get locations JSON
+    local locations_json=$(echo "$METADATA" | jq -c ".domains[\"$domain\"].locations[]" 2>/dev/null)
+    
+    # Generate server block(s)
+    if [ "$has_ssl" -eq 1 ]; then
+        # Convert absolute host paths to container paths
+        # Host: /opt/gokku/services/nginx-lb/ssl/domain.crt
+        # Container: /etc/nginx/ssl/domain.crt
+        # Volume mount: -v "$SERVICE_DIR/ssl:/etc/nginx/ssl:ro"
+        local service_base_path="/opt/gokku/services/$service_name"
+        local ssl_cert_container_path="${ssl_cert_file#$service_base_path/}"
+        local ssl_key_container_path="${ssl_key_file#$service_base_path/}"
+        
+        # SSL enabled - create HTTP redirect + HTTPS block
+        cat > "$server_file" << EOF
+# HTTP redirect to HTTPS
+server {
+    listen 80;
+    server_name $domain;
+    
+    location / {
+        return 301 https://\$server_name\$request_uri;
+    }
+}
+
+# HTTPS server block
+server {
+    listen 443 ssl http2;
+    server_name $domain;
+    
+    ssl_certificate /etc/nginx/$ssl_cert_container_path;
+    ssl_certificate_key /etc/nginx/$ssl_key_container_path;
+    
+    # SSL configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # Security headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+EOF
+        
+        # Add locations to HTTPS block
+        generate_locations_block "$server_file" "$locations_json"
+        
+        # Close HTTPS server block
+        echo "}" >> "$server_file"
+    else
+        # No SSL - create HTTP-only block
+        cat > "$server_file" << EOF
 server {
     listen 80;
     server_name $domain;
 
 EOF
-    
-    # Add each location - collect all first, then write
-    local locations_json=$(echo "$METADATA" | jq -c ".domains[\"$domain\"].locations[]" 2>/dev/null)
-    
-    echo "$locations_json" | while IFS= read -r location_obj; do
-        local path=$(echo "$location_obj" | jq -r '.path')
-        local upstream=$(echo "$location_obj" | jq -r '.upstream')
         
-        cat >> "$server_file" << EOF
-    location $path {
-        proxy_pass http://$upstream;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-
-EOF
-    done
-    
-    # Close server block
-    echo "}" >> "$server_file"
+        # Add locations
+        generate_locations_block "$server_file" "$locations_json"
+        
+        # Close server block
+        echo "}" >> "$server_file"
+    fi
 }
 
 # Write nginx upstream configuration file (legacy - for backward compatibility)
