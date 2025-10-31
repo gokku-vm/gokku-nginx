@@ -11,26 +11,57 @@ if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ]; then
     exit 1
 fi
 
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
 echo "-----> Removing upstream for app '$APP_NAME'"
 
-# Remove upstream configuration
 UPSTREAM_NAME="$APP_NAME"
-CONFIG_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/${UPSTREAM_NAME}.conf"
+UPSTREAM_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/upstreams/${UPSTREAM_NAME}.conf"
 
-if [ -f "$CONFIG_FILE" ]; then
-    rm "$CONFIG_FILE"
-    echo "-----> Upstream configuration removed: $CONFIG_FILE"
+# Find all domains using this upstream and remove their locations
+load_metadata "$SERVICE_NAME"
+domains=$(echo "$METADATA" | jq -r ".domains | keys[]" 2>/dev/null)
 
-    # Reload nginx if container is running
-    if container_is_running "$SERVICE_NAME"; then
-        echo "-----> Reloading nginx configuration"
-        docker exec "$SERVICE_NAME" nginx -s reload
+if [ -n "$domains" ]; then
+    echo "$domains" | while IFS= read -r domain; do
+        locations_to_remove=$(echo "$METADATA" | jq -r ".domains[\"$domain\"].locations[]? | select(.upstream == \"$UPSTREAM_NAME\") | .path" 2>/dev/null)
+        
+        if [ -n "$locations_to_remove" ]; then
+            echo "$locations_to_remove" | while IFS= read -r path; do
+                echo "-----> Removing location '$path' from domain '$domain'"
+                metadata_remove_location "$SERVICE_NAME" "$domain" "$path"
+            done
+            
+            # Regenerate server block for this domain
+            nginx_generate_server_block "$SERVICE_NAME" "$domain"
+        fi
+    done
+fi
+
+# Remove upstream file
+if [ -f "$UPSTREAM_FILE" ]; then
+    rm "$UPSTREAM_FILE"
+    echo "-----> Upstream configuration removed: $UPSTREAM_FILE"
+fi
+
+# Remove upstream from metadata
+metadata_remove_upstream "$SERVICE_NAME" "$UPSTREAM_NAME"
+
+# Reload nginx if container is running
+if container_is_running "$SERVICE_NAME"; then
+    echo "-----> Reloading nginx configuration"
+    if docker exec "$SERVICE_NAME" nginx -s reload 2>/dev/null; then
         echo "-----> Nginx configuration reloaded"
     else
-        echo "-----> Nginx container not running, configuration will be updated on next start"
+        echo "-----> Failed to reload nginx configuration"
     fi
-
-    echo "-----> Upstream '$UPSTREAM_NAME' removed"
 else
-    echo "-----> No upstream configuration found for app '$APP_NAME'"
+    echo "-----> Nginx container not running, configuration will be updated on next start"
 fi
+
+echo "-----> Upstream '$UPSTREAM_NAME' removed"

@@ -16,7 +16,8 @@ echo "-----> Installing nginx service: $SERVICE_NAME"
 
 # Create nginx service directory
 SERVICE_DIR="/opt/gokku/services/$SERVICE_NAME"
-mkdir -p "$SERVICE_DIR/conf.d"
+mkdir -p "$SERVICE_DIR/conf.d/upstreams"
+mkdir -p "$SERVICE_DIR/conf.d/servers"
 mkdir -p "$SERVICE_DIR/ssl"
 mkdir -p "$SERVICE_DIR/logs"
 
@@ -78,32 +79,23 @@ http {
     add_header X-Forwarded-For $proxy_add_x_forwarded_for;
     add_header X-Forwarded-Proto $scheme;
 
-    # Include site configurations
+    # Include upstream configurations
+    include /etc/nginx/conf.d/upstreams/*.conf;
+    
+    # Include server configurations
+    include /etc/nginx/conf.d/servers/*.conf;
+    
+    # Include legacy configurations (backward compatibility)
     include /etc/nginx/conf.d/*.conf;
 }
 EOF
 
-# Create default upstream configuration
-cat > "$SERVICE_DIR/conf.d/default.conf" << 'EOF'
-# Default nginx configuration
-# Add your upstream and server blocks here
-
-# Example upstream configuration:
-# upstream api_backend {
-#     server api-production:8080;
-#     server api-production-2:8080;
-# }
-
-# Example server configuration:
-# server {
-#     listen 80;
-#     server_name _;
-#
-#     location / {
-#         return 200 'Nginx is running!';
-#         add_header Content-Type text/plain;
-#     }
-# }
+# Initialize metadata file
+cat > "$SERVICE_DIR/metadata.json" << 'EOF'
+{
+  "domains": {},
+  "upstreams": {}
+}
 EOF
 
 # Create nginx container

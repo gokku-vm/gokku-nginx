@@ -1,0 +1,45 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+DOMAIN="$2"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$DOMAIN" ]; then
+    echo "Usage: gokku nginx:list-locations <service> <domain>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:list-locations nginx-lb api.example.com"
+    exit 1
+fi
+
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
+echo "Locations for domain '$DOMAIN':"
+echo "================================"
+
+load_metadata "$SERVICE_NAME"
+
+# Get locations for this domain
+locations=$(echo "$METADATA" | jq -r ".domains[\"$DOMAIN\"].locations[]? // []" 2>/dev/null)
+
+if [ -z "$locations" ] || [ "$locations" = "null" ]; then
+    echo "No locations configured for domain '$DOMAIN'"
+    exit 0
+fi
+
+# Count locations
+count=$(echo "$METADATA" | jq ".domains[\"$DOMAIN\"].locations | length" 2>/dev/null)
+echo ""
+echo "Found $count location(s):"
+echo ""
+
+# List each location
+echo "$METADATA" | jq -r ".domains[\"$DOMAIN\"].locations[] | \"\(.path) -> app: \(.app) (upstream: \(.upstream))\"" 2>/dev/null | while IFS= read -r line; do
+    echo "  $line"
+done
+
+echo ""
+

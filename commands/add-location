@@ -1,0 +1,104 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+DOMAIN="$2"
+PATH="$3"
+APP_NAME="$4"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$DOMAIN" ] || [ -z "$PATH" ] || [ -z "$APP_NAME" ]; then
+    echo "Usage: gokku nginx:add-location <service> <domain> <path> <app>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:add-location nginx-lb api.example.com /users user-service"
+    echo "  gokku nginx:add-location nginx-lb api.example.com /orders order-service"
+    echo "  gokku nginx:add-location nginx-lb api.example.com /v1 api-v1"
+    echo "  gokku nginx:add-location nginx-lb api.example.com /v2 api-v2"
+    echo ""
+    echo "Note: Path should start with / (e.g., /users, /orders, /v1/)"
+    exit 1
+fi
+
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
+# Normalize path (ensure it starts with / and ends with / if not root)
+if [ "$PATH" != "/" ]; then
+    if [[ ! "$PATH" =~ ^/ ]]; then
+        PATH="/$PATH"
+    fi
+    if [[ ! "$PATH" =~ /$ ]]; then
+        PATH="$PATH/"
+    fi
+fi
+
+echo "-----> Adding location '$PATH' for app '$APP_NAME' to domain '$DOMAIN'"
+
+# Determine upstream name
+UPSTREAM_NAME="$APP_NAME"
+
+# Check if upstream exists, if not create it
+UPSTREAM_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/upstreams/${UPSTREAM_NAME}.conf"
+if [ ! -f "$UPSTREAM_FILE" ]; then
+    echo "-----> Upstream '$UPSTREAM_NAME' does not exist, creating..."
+    
+    # Get running container ports
+    get_ports_by_name "$APP_NAME"
+    
+    if [ ${#PORTS[@]} -eq 0 ]; then
+        echo "-----> No running containers found for app '$APP_NAME'"
+        echo "-----> Creating upstream without servers (will be updated when containers start)"
+        # Create empty upstream
+        mkdir -p "$(dirname "$UPSTREAM_FILE")"
+        cat > "$UPSTREAM_FILE" << EOF
+upstream $UPSTREAM_NAME {
+    # No servers available yet
+}
+EOF
+    else
+        nginx_upstream_only "$UPSTREAM_FILE" "$UPSTREAM_NAME"
+        echo "-----> Upstream created with ${#PORTS[@]} server(s)"
+    fi
+    
+    # Add upstream to metadata
+    metadata_add_upstream "$SERVICE_NAME" "$UPSTREAM_NAME" "$APP_NAME"
+else
+    echo "-----> Upstream '$UPSTREAM_NAME' already exists"
+fi
+
+# Add location to metadata
+metadata_add_location "$SERVICE_NAME" "$DOMAIN" "$PATH" "$UPSTREAM_NAME" "$APP_NAME"
+
+# Generate server block
+nginx_generate_server_block "$SERVICE_NAME" "$DOMAIN"
+
+echo "-----> Location '$PATH' added for domain '$DOMAIN'"
+
+# Ensure container is running
+if ! ensure_nginx_running "$SERVICE_NAME"; then
+    echo "-----> Failed to start nginx container"
+    exit 1
+fi
+
+# Test configuration before applying
+echo "-----> Testing nginx configuration..."
+if ! docker exec "$SERVICE_NAME" nginx -t 2>/dev/null; then
+    echo "-----> Configuration test failed, but continuing..."
+fi
+
+# Reload nginx configuration
+echo "-----> Reloading nginx configuration"
+
+docker restart "$SERVICE_NAME" >/dev/null 2>&1
+wait_for_container "$SERVICE_NAME" 30
+
+if container_is_running "$SERVICE_NAME"; then
+    echo "-----> Nginx container restarted"
+else
+    echo "-----> Warning: Container may not be running properly"
+fi
+
+echo "-----> Location '$PATH' successfully added"
+

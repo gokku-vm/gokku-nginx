@@ -6,6 +6,8 @@ A Gokku plugin that provides nginx as a service for load balancing, reverse prox
 
 - **Load Balancing**: Distribute traffic across multiple backend services
 - **Reverse Proxy**: Route requests to different applications
+- **Path-based Routing**: Route different paths to different apps on the same domain
+- **Microservices Support**: Configure multiple services with different paths
 - **SSL Termination**: Handle SSL certificates and HTTPS
 - **Static File Serving**: Serve static assets efficiently
 - **Health Checks**: Monitor backend service health
@@ -64,6 +66,27 @@ gokku nginx:scale nginx-lb api web 4
 gokku nginx:remove-upstream nginx-lb api
 ```
 
+### Location Management
+
+Manage multiple routes/paths on the same domain:
+
+```bash
+# Add a location (path) to a domain pointing to an app
+gokku nginx:add-location nginx-lb api.example.com /users user-service
+gokku nginx:add-location nginx-lb api.example.com /orders order-service
+
+# List all locations for a domain
+gokku nginx:list-locations nginx-lb api.example.com
+
+# Remove a location
+gokku nginx:remove-location nginx-lb api.example.com /users
+```
+
+**Use Cases:**
+- **Microservices**: Different paths route to different services
+- **API Versioning**: Version your API with different paths (e.g., `/v1`, `/v2`)
+- **Service Separation**: Separate admin, public, and internal routes
+
 ### Service Management
 
 ```bash
@@ -91,27 +114,34 @@ gokku nginx:config nginx-lb
 The nginx service creates a configuration directory at `/opt/gokku/services/<service-name>/` with:
 
 - `nginx.conf` - Main nginx configuration
-- `conf.d/` - Directory for site-specific configurations
+- `conf.d/upstreams/` - Upstream configurations (one per app)
+- `conf.d/servers/` - Server block configurations (one per domain)
+- `conf.d/` - Legacy configurations (backward compatibility)
+- `metadata.json` - Metadata for tracking upstreams and locations
 - `ssl/` - SSL certificates directory
 
 ### Example Configuration
 
+The plugin now uses a separated architecture:
+
 ```nginx
-# /opt/gokku/services/nginx-lb/conf.d/api.conf
-upstream api_backend {
-    server api-production:8080;
-    server api-production-2:8080;
+# /opt/gokku/services/nginx-lb/conf.d/upstreams/api.conf
+upstream api {
+    server api:8080;
+    server api:8081;
 }
 
+# /opt/gokku/services/nginx-lb/conf.d/servers/api.example.com.conf
 server {
     listen 80;
     server_name api.example.com;
     
     location / {
-        proxy_pass http://api_backend;
+        proxy_pass http://api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
@@ -214,6 +244,8 @@ gokku nginx:config nginx-lb
 
 ## Complete Example
 
+### Basic Setup
+
 Here's a complete example of setting up nginx as a load balancer:
 
 ```bash
@@ -232,8 +264,8 @@ gokku nginx:add-upstream nginx-lb api
 gokku nginx:add-upstream nginx-lb web
 
 # 5. Scale apps
-gokku nginx:scale nginx-lb api web 4
-gokku nginx:scale nginx-lb web web 2
+gokku scale api web=4
+gokku scale web web=2
 
 # 6. Check configuration
 gokku nginx:info nginx-lb
@@ -247,22 +279,158 @@ This will create:
 - `api.example.com` → 4 containers on ports 8080-8083
 - `www.example.com` → 2 containers on ports 8080-8081
 
+### Advanced Setup with Multiple Paths
+
+Example of a microservices architecture:
+
+```bash
+# 1. Setup main API domain
+gokku nginx:add-domain nginx-lb api api.example.com
+gokku nginx:add-upstream nginx-lb api
+
+# 2. Setup microservices
+gokku nginx:add-upstream nginx-lb user-service
+gokku nginx:add-upstream nginx-lb order-service
+gokku nginx:add-upstream nginx-lb payment-service
+
+# 3. Add routes for microservices
+gokku nginx:add-location nginx-lb api.example.com /users user-service
+gokku nginx:add-location nginx-lb api.example.com /orders order-service
+gokku nginx:add-location nginx-lb api.example.com /payments payment-service
+
+# 4. List all routes
+gokku nginx:list-locations nginx-lb api.example.com
+
+# 5. Test configuration
+gokku nginx:test nginx-lb
+```
+
+This routes:
+- `api.example.com/` → `api` app (main API)
+- `api.example.com/users/` → `user-service` app
+- `api.example.com/orders/` → `order-service` app
+- `api.example.com/payments/` → `payment-service` app
+
 ## Examples
 
 ### Simple Reverse Proxy
 
+```bash
+# Setup basic reverse proxy
+gokku nginx:add-domain nginx-lb myapp myapp.example.com
+gokku nginx:add-upstream nginx-lb myapp
+```
+
+This creates:
 ```nginx
+upstream myapp {
+    server myapp:8080;
+    server myapp:8081;
+}
+
 server {
     listen 80;
     server_name myapp.example.com;
     
     location / {
-        proxy_pass http://myapp-production:8080;
+        proxy_pass http://myapp;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
+
+### Microservices Architecture
+
+Route different paths to different services:
+
+```bash
+# Setup main API domain
+gokku nginx:add-domain nginx-lb api api.example.com
+gokku nginx:add-upstream nginx-lb api
+
+# Add microservices routes
+gokku nginx:add-location nginx-lb api.example.com /users user-service
+gokku nginx:add-location nginx-lb api.example.com /orders order-service
+gokku nginx:add-location nginx-lb api.example.com /payments payment-service
+```
+
+This creates:
+```nginx
+upstream api {
+    server api:8080;
+}
+
+upstream user-service {
+    server user-service:8080;
+}
+
+upstream order-service {
+    server order-service:8080;
+}
+
+upstream payment-service {
+    server payment-service:8080;
+}
+
+server {
+    listen 80;
+    server_name api.example.com;
+    
+    location / {
+        proxy_pass http://api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    
+    location /users/ {
+        proxy_pass http://user-service;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    
+    location /orders/ {
+        proxy_pass http://order-service;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    
+    location /payments/ {
+        proxy_pass http://payment-service;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### API Versioning
+
+Route different API versions to different apps:
+
+```bash
+# Setup versioned API
+gokku nginx:add-domain nginx-lb api api.example.com
+
+# Add API versions
+gokku nginx:add-location nginx-lb api.example.com /v1 api-v1
+gokku nginx:add-location nginx-lb api.example.com /v2 api-v2
+gokku nginx:add-location nginx-lb api.example.com /admin admin-app
+```
+
+This routes:
+- `api.example.com/v1/` → `api-v1` app
+- `api.example.com/v2/` → `api-v2` app
+- `api.example.com/admin/` → `admin-app` app
 
 ### Load Balancer with Health Checks
 

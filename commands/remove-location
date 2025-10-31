@@ -1,0 +1,76 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+DOMAIN="$2"
+PATH="$3"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$DOMAIN" ] || [ -z "$PATH" ]; then
+    echo "Usage: gokku nginx:remove-location <service> <domain> <path>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:remove-location nginx-lb api.example.com /users"
+    echo "  gokku nginx:remove-location nginx-lb api.example.com /orders"
+    exit 1
+fi
+
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
+# Normalize path
+if [ "$PATH" != "/" ]; then
+    if [[ ! "$PATH" =~ ^/ ]]; then
+        PATH="/$PATH"
+    fi
+    if [[ ! "$PATH" =~ /$ ]]; then
+        PATH="$PATH/"
+    fi
+fi
+
+echo "-----> Removing location '$PATH' from domain '$DOMAIN'"
+
+# Check if location exists
+load_metadata "$SERVICE_NAME"
+local location_exists=$(echo "$METADATA" | jq ".domains[\"$DOMAIN\"].locations[]? | select(.path == \"$PATH\")" 2>/dev/null)
+
+if [ -z "$location_exists" ] || [ "$location_exists" = "null" ]; then
+    echo "-----> Location '$PATH' not found for domain '$DOMAIN'"
+    exit 1
+fi
+
+# Remove location from metadata
+metadata_remove_location "$SERVICE_NAME" "$DOMAIN" "$PATH"
+
+# Regenerate server block
+nginx_generate_server_block "$SERVICE_NAME" "$DOMAIN"
+
+echo "-----> Location '$PATH' removed from domain '$DOMAIN'"
+
+# Ensure container is running
+if ! ensure_nginx_running "$SERVICE_NAME"; then
+    echo "-----> Failed to start nginx container"
+    exit 1
+fi
+
+# Test configuration before applying
+echo "-----> Testing nginx configuration..."
+if ! docker exec "$SERVICE_NAME" nginx -t 2>/dev/null; then
+    echo "-----> Configuration test failed, but continuing..."
+fi
+
+# Reload nginx configuration
+echo "-----> Reloading nginx configuration"
+
+docker restart "$SERVICE_NAME" >/dev/null 2>&1
+wait_for_container "$SERVICE_NAME" 30
+
+if container_is_running "$SERVICE_NAME"; then
+    echo "-----> Nginx container restarted"
+else
+    echo "-----> Warning: Container may not be running properly"
+fi
+
+echo "-----> Location '$PATH' successfully removed"
+

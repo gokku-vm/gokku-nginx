@@ -21,18 +21,6 @@ source "$SCRIPT_DIR/../lib/functions.sh"
 
 echo "-----> Updating upstream for app '$APP_NAME'"
 
-# Get app domain
-APP_DIR="/opt/gokku/apps/$APP_NAME"
-CNAME_FILE="$APP_DIR/CNAME"
-
-if [ -f "$CNAME_FILE" ]; then
-    DOMAIN=$(cat "$CNAME_FILE" | tr -d '\n')
-    echo "-----> Using domain: $DOMAIN"
-else
-    DOMAIN="${APP_NAME}.local"
-    echo "-----> No CNAME found, using default domain: $DOMAIN"
-fi
-
 # Determine upstream name
 if [ -n "$PROCESS_TYPE" ]; then
     UPSTREAM_NAME="${APP_NAME}-${PROCESS_TYPE}"
@@ -43,20 +31,25 @@ fi
 # Get all running container ports using docker ps
 get_ports_by_name "$APP_NAME"
 
-# Create upstream configuration
-CONFIG_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/${UPSTREAM_NAME}.conf"
+# Update upstream configuration file
+UPSTREAM_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/upstreams/${UPSTREAM_NAME}.conf"
 
 if [ ${#PORTS[@]} -eq 0 ]; then
-    # No running containers, remove config if exists
-    if [ -f "$CONFIG_FILE" ]; then
-        rm -f "$CONFIG_FILE"
-        echo "-----> Removed upstream configuration: $CONFIG_FILE"
+    # No running containers, but keep upstream file with comment
+    if [ -f "$UPSTREAM_FILE" ]; then
+        mkdir -p "$(dirname "$UPSTREAM_FILE")"
+        cat > "$UPSTREAM_FILE" << EOF
+upstream $UPSTREAM_NAME {
+    # No servers available
+}
+EOF
+        echo "-----> Updated upstream configuration (no servers): $UPSTREAM_FILE"
     else
-        echo "-----> No running containers found, nothing to update"
+        echo "-----> No running containers found, upstream not created yet"
     fi
 else
-    nginx_upstream_config "$CONFIG_FILE" "$UPSTREAM_NAME" "$DOMAIN"
-    echo "-----> Upstream configuration updated: $CONFIG_FILE"
+    nginx_upstream_only "$UPSTREAM_FILE" "$UPSTREAM_NAME"
+    echo "-----> Upstream configuration updated: $UPSTREAM_FILE"
     echo "-----> Added ${#PORTS[@]} server(s) to upstream '$UPSTREAM_NAME'"
 fi
 
@@ -93,4 +86,17 @@ else
     fi
 fi
 
-echo "-----> Upstream '$UPSTREAM_NAME' updated for domain '$DOMAIN'"
+# Regenerate all server blocks that use this upstream
+load_metadata "$SERVICE_NAME"
+domains=$(echo "$METADATA" | jq -r ".domains | keys[]" 2>/dev/null)
+
+if [ -n "$domains" ]; then
+    echo "$domains" | while IFS= read -r domain; do
+        uses_upstream=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations[]? | select(.upstream == \"$UPSTREAM_NAME\")" 2>/dev/null)
+        if [ -n "$uses_upstream" ] && [ "$uses_upstream" != "null" ]; then
+            nginx_generate_server_block "$SERVICE_NAME" "$domain"
+        fi
+    done
+fi
+
+echo "-----> Upstream '$UPSTREAM_NAME' updated"
