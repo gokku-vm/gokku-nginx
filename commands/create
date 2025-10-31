@@ -1,0 +1,27 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+APP_NAME="$2"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ]; then
+    echo "Usage: gokku nginx:add-upstream <service> <app>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:add-upstream nginx-lb api"
+    echo "  gokku nginx:add-upstream nginx-lb web"
+    exit 1
+fi
+
+# Source plugin helpers from Gokku repository https://github.com/thadeu/gokku/blob/main/scripts/plugin-helpers.sh
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
+echo "-----> Creating nginx service: $SERVICE_NAME"
+SERVICE_DIR="/opt/gokku/services/$SERVICE_NAME"
+
+# Call the install script to provision Nginx service directory, container, and defaults
+"$SCRIPT_DIR/../bin/install" "$SERVICE_NAME"
+
+echo "-----> Service $SERVICE_NAME created."
