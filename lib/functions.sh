@@ -7,16 +7,22 @@ get_ports_by_name() {
     local app_name="$1"
     PORTS=()
     
-    # Get running containers for this app by name and extract ports
-    local ports_temp=$(docker ps --filter "name=^${app_name}$" --filter "status=running" --format json 2>/dev/null | while IFS= read -r container_json; do
+    # Try multiple patterns to find containers
+    # Pattern 1: Exact match (app-name)
+    # Pattern 2: Starts with app-name (app-name-web-1, app-name-worker-1, etc)
+    local ports_temp=$(docker ps --filter "status=running" --format json 2>/dev/null | while IFS= read -r container_json; do
         if [ -n "$container_json" ]; then
+            local container_name=$(echo "$container_json" | jq -r '.Names' 2>/dev/null)
             local state=$(echo "$container_json" | jq -r '.State' 2>/dev/null)
             local ports_field=$(echo "$container_json" | jq -r '.Ports' 2>/dev/null)
             
-            if [ "$state" = "running" ] && [ -n "$ports_field" ] && [ "$ports_field" != "null" ] && [ "$ports_field" != "" ]; then
-                # Parse ports from format "0.0.0.0:3001->3001/tcp" or "0.0.0.0:3001->3001/tcp, [::]:3001->3001/tcp"
-                # Extract host port (before ->) - format: IP:PORT->CONTAINER_PORT/tcp
-                echo "$ports_field" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+->[0-9]+/tcp' | sed 's/.*://' | sed 's/->.*//'
+            # Check if container name matches app name (exact or starts with)
+            if [ "$state" = "running" ] && [[ "$container_name" =~ ^${app_name}(-|$) ]]; then
+                if [ -n "$ports_field" ] && [ "$ports_field" != "null" ] && [ "$ports_field" != "" ]; then
+                    # Parse ports from format "0.0.0.0:3001->3001/tcp" or "0.0.0.0:3001->3001/tcp, [::]:3001->3001/tcp"
+                    # Extract host port (before ->) - format: IP:PORT->CONTAINER_PORT/tcp
+                    echo "$ports_field" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+->[0-9]+/tcp' | sed 's/.*://' | sed 's/->.*//'
+                fi
             fi
         fi
     done | sort -u)
@@ -66,13 +72,23 @@ nginx_upstream_only() {
     fi
     
     # Generate upstream config with all running containers
-    cat > "$upstream_file" << EOF
+    if [ ${#PORTS[@]} -eq 0 ]; then
+        # No ports available - create upstream with backup or fail
+        cat > "$upstream_file" << EOF
+upstream $upstream_name {
+    # No servers available - upstream will return 502/504
+    server 127.0.0.1:65535 down;
+}
+EOF
+    else
+        cat > "$upstream_file" << EOF
 upstream $upstream_name {
 $(for port in "${PORTS[@]}"; do
     echo "    server $server_addr:$port;"
 done)
 }
 EOF
+    fi
 }
 
 # Get metadata file path
@@ -281,9 +297,10 @@ generate_locations_block() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_connect_timeout 0;
-        proxy_send_timeout 0;
-        proxy_read_timeout 0;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_buffering off;
     }
 
 EOF

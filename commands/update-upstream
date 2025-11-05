@@ -47,26 +47,24 @@ done
 # Get all running container ports using docker ps (final check)
 get_ports_by_name "$APP_NAME"
 
+# Debug: Show what containers were found
+echo "-----> Debug: Searching for containers matching '$APP_NAME'"
+docker ps --filter "status=running" --format "table {{.Names}}\t{{.Ports}}" | grep -E "NAME|${APP_NAME}" || echo "-----> No containers found with name pattern '$APP_NAME'"
+
 # Update upstream configuration file
 UPSTREAM_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/upstreams/${UPSTREAM_NAME}.conf"
 
 if [ ${#PORTS[@]} -eq 0 ]; then
-    # No running containers, but keep upstream file with comment
-    if [ -f "$UPSTREAM_FILE" ]; then
-        mkdir -p "$(dirname "$UPSTREAM_FILE")"
-        cat > "$UPSTREAM_FILE" << EOF
-upstream $UPSTREAM_NAME {
-    # No servers available
-}
-EOF
-        echo "-----> Updated upstream configuration (no servers): $UPSTREAM_FILE"
-    else
-        echo "-----> No running containers found, upstream not created yet"
-    fi
+    echo "-----> WARNING: No running containers found for app '$APP_NAME'"
+    echo "-----> Upstream will be created but may return 502/504 errors"
+    # Use nginx_upstream_only which will create a placeholder upstream
+    nginx_upstream_only "$UPSTREAM_FILE" "$UPSTREAM_NAME" "$SERVICE_NAME"
+    echo "-----> Updated upstream configuration (no servers): $UPSTREAM_FILE"
 else
     nginx_upstream_only "$UPSTREAM_FILE" "$UPSTREAM_NAME" "$SERVICE_NAME"
     echo "-----> Upstream configuration updated: $UPSTREAM_FILE"
     echo "-----> Added ${#PORTS[@]} server(s) to upstream '$UPSTREAM_NAME'"
+    echo "-----> Ports: ${PORTS[*]}"
 fi
 
 # Regenerate all server blocks that use this upstream BEFORE reloading nginx
