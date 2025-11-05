@@ -1,5 +1,8 @@
 #!/bin/bash
 
+source /opt/gokku/plugins/nginx/lib/ssl.sh
+source /opt/gokku/plugins/nginx/lib/metadata.sh
+
 # Get running container ports by app name
 # Usage: get_ports_by_name APP_NAME
 # Returns: array of ports in global PORTS variable (declare -a PORTS)
@@ -91,195 +94,6 @@ EOF
     fi
 }
 
-# Get metadata file path
-# Usage: get_metadata_file SERVICE_NAME
-# Returns: path to metadata.json
-get_metadata_file() {
-    local service_name="$1"
-    echo "/opt/gokku/services/$service_name/metadata.json"
-}
-
-# Load metadata
-# Usage: load_metadata SERVICE_NAME
-# Returns: JSON in METADATA variable
-# Note: Creates metadata.json if it doesn't exist (for backward compatibility)
-load_metadata() {
-    local service_name="$1"
-    local metadata_file=$(get_metadata_file "$service_name")
-    
-    if [ -f "$metadata_file" ]; then
-        METADATA=$(cat "$metadata_file" 2>/dev/null || echo '{"domains":{},"upstreams":{},"deny_ips":[]}')
-        # Ensure deny_ips field exists (backward compatibility)
-        if ! echo "$METADATA" | jq -e ".deny_ips" >/dev/null 2>&1; then
-            METADATA=$(echo "$METADATA" | jq '. + {"deny_ips": []}')
-        fi
-    else
-        # File doesn't exist - create it with empty structure for backward compatibility
-        METADATA='{"domains":{},"upstreams":{},"deny_ips":[]}'
-        mkdir -p "$(dirname "$metadata_file")"
-        echo "$METADATA" | jq . > "$metadata_file" 2>/dev/null || echo "$METADATA" > "$metadata_file"
-    fi
-}
-
-# Save metadata
-# Usage: save_metadata SERVICE_NAME
-# Expects: METADATA variable to be set
-save_metadata() {
-    local service_name="$1"
-    local metadata_file=$(get_metadata_file "$service_name")
-    
-    mkdir -p "$(dirname "$metadata_file")"
-    echo "$METADATA" | jq . > "$metadata_file" 2>/dev/null || echo "$METADATA" > "$metadata_file"
-}
-
-# Add upstream to metadata
-# Usage: metadata_add_upstream SERVICE_NAME UPSTREAM_NAME APP_NAME
-metadata_add_upstream() {
-    local service_name="$1"
-    local upstream_name="$2"
-    local app_name="$3"
-    
-    load_metadata "$service_name"
-    METADATA=$(echo "$METADATA" | jq ".upstreams[\"$upstream_name\"] = {\"app\": \"$app_name\"}")
-    save_metadata "$service_name"
-}
-
-# Remove upstream from metadata
-# Usage: metadata_remove_upstream SERVICE_NAME UPSTREAM_NAME
-metadata_remove_upstream() {
-    local service_name="$1"
-    local upstream_name="$2"
-    
-    load_metadata "$service_name"
-    METADATA=$(echo "$METADATA" | jq "del(.upstreams[\"$upstream_name\"])")
-    save_metadata "$service_name"
-}
-
-# Add location to domain metadata
-# Usage: metadata_add_location SERVICE_NAME DOMAIN PATH UPSTREAM_NAME APP_NAME
-metadata_add_location() {
-    local service_name="$1"
-    local domain="$2"
-    local path="$3"
-    local upstream_name="$4"
-    local app_name="$5"
-    
-    load_metadata "$service_name"
-    
-    # Ensure domain exists
-    if ! echo "$METADATA" | jq -e ".domains[\"$domain\"]" >/dev/null 2>&1; then
-        METADATA=$(echo "$METADATA" | jq ".domains[\"$domain\"] = {\"locations\": []}")
-    fi
-    
-    # Remove existing location with same path if exists
-    METADATA=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations = (.domains[\"$domain\"].locations | map(select(.path != \"$path\")))")
-    
-    # Add new location
-    METADATA=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations += [{\"path\": \"$path\", \"app\": \"$app_name\", \"upstream\": \"$upstream_name\"}]")
-    
-    # Sort locations by path length (longer/more specific first)
-    METADATA=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations = (.domains[\"$domain\"].locations | sort_by(-(.path | length)))")
-    
-    save_metadata "$service_name"
-}
-
-# Remove location from domain metadata
-# Usage: metadata_remove_location SERVICE_NAME DOMAIN PATH
-metadata_remove_location() {
-    local service_name="$1"
-    local domain="$2"
-    local path="$3"
-    
-    load_metadata "$service_name"
-    METADATA=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations = (.domains[\"$domain\"].locations | map(select(.path != \"$path\")))")
-    save_metadata "$service_name"
-}
-
-# Check if SSL certificates exist for a domain
-# Usage: check_ssl_certificates SERVICE_NAME DOMAIN
-# Returns: 0 if SSL exists, 1 if not
-# Sets: SSL_CERT_FILE and SSL_KEY_FILE if found
-check_ssl_certificates() {
-    local service_name="$1"
-    local domain="$2"
-    local ssl_dir="/opt/gokku/services/$service_name/ssl"
-    local letsencrypt_live="/opt/gokku/plugins/letsencrypt/live/${domain}"
-    
-    SSL_CERT_FILE=""
-    SSL_KEY_FILE=""
-    
-    # First, check directly in Let's Encrypt live directory (most reliable)
-    if [ -f "${letsencrypt_live}/fullchain.pem" ] && [ -f "${letsencrypt_live}/privkey.pem" ]; then
-        # Verify symlinks can be resolved (they point to archive/)
-        if [ -r "${letsencrypt_live}/fullchain.pem" ] && [ -r "${letsencrypt_live}/privkey.pem" ]; then
-            SSL_CERT_FILE="${letsencrypt_live}/fullchain.pem"
-            SSL_KEY_FILE="${letsencrypt_live}/privkey.pem"
-            return 0
-        fi
-    fi
-    
-    # Check for symlinks in ssl directory (created by plugin)
-    # Plugin creates: $NGINX_SSL_DIR/$DOMAIN.crt -> $PLUGIN_DIR/live/$DOMAIN/fullchain.pem
-    if [ -L "$ssl_dir/${domain}.crt" ] && [ -L "$ssl_dir/${domain}.key" ]; then
-        # Verify symlink targets are readable (will fail if target doesn't exist)
-        if [ -r "$ssl_dir/${domain}.crt" ] && [ -r "$ssl_dir/${domain}.key" ]; then
-            SSL_CERT_FILE="$ssl_dir/${domain}.crt"
-            SSL_KEY_FILE="$ssl_dir/${domain}.key"
-            return 0
-        fi
-    fi
-    
-    # Fallback: check if .crt/.key files exist (regular files or symlinks)
-    if [ -f "$ssl_dir/${domain}.crt" ] && [ -f "$ssl_dir/${domain}.key" ]; then
-        SSL_CERT_FILE="$ssl_dir/${domain}.crt"
-        SSL_KEY_FILE="$ssl_dir/${domain}.key"
-        return 0
-    fi
-    
-    # Check for Let's Encrypt format in subdirectory (fullchain.pem, privkey.pem)
-    if [ -f "$ssl_dir/${domain}/fullchain.pem" ] && [ -f "$ssl_dir/${domain}/privkey.pem" ]; then
-        SSL_CERT_FILE="$ssl_dir/${domain}/fullchain.pem"
-        SSL_KEY_FILE="$ssl_dir/${domain}/privkey.pem"
-        return 0
-    fi
-    
-    # Check for Let's Encrypt in ssl directory root (links from plugin)
-    if [ -f "$ssl_dir/${domain}-fullchain.pem" ] && [ -f "$ssl_dir/${domain}-privkey.pem" ]; then
-        SSL_CERT_FILE="$ssl_dir/${domain}-fullchain.pem"
-        SSL_KEY_FILE="$ssl_dir/${domain}-privkey.pem"
-        return 0
-    fi
-    
-    # Check for any .crt and .key files matching domain pattern
-    if [ -d "$ssl_dir" ]; then
-        for cert_file in "$ssl_dir"/*.crt "$ssl_dir"/*.pem; do
-            # Skip if glob didn't match any files
-            [ ! -f "$cert_file" ] && continue
-            
-            local cert_basename=$(basename "$cert_file" .crt)
-            cert_basename=$(basename "$cert_basename" .pem)
-            
-            # Try to match domain in filename
-            if [[ "$cert_basename" == *"$domain"* ]] || [[ "$cert_basename" == "fullchain" ]] || [[ "$cert_basename" == "${domain}-fullchain" ]]; then
-                local key_file=""
-                if [[ "$cert_file" == *.crt ]]; then
-                    key_file="${cert_file%.crt}.key"
-                elif [[ "$cert_file" == *fullchain.pem ]]; then
-                    key_file="${cert_file/fullchain.pem/privkey.pem}"
-                fi
-                
-                if [ -f "$key_file" ]; then
-                    SSL_CERT_FILE="$cert_file"
-                    SSL_KEY_FILE="$key_file"
-                    return 0
-                fi
-            fi
-        done
-    fi
-    
-    return 1
-}
-
 # Generate locations block
 # Usage: generate_locations_block OUTPUT_FILE LOCATIONS_JSON
 generate_locations_block() {
@@ -320,7 +134,8 @@ nginx_generate_server_block() {
     local locations_count=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations | length" 2>/dev/null)
     
     if [ -z "$locations_count" ] || [ "$locations_count" = "null" ] || [ "$locations_count" = "0" ]; then
-        # No locations, remove server block if exists
+        # No locations configured - remove server block
+        # Default server block will handle and block requests
         rm -f "$server_file"
         return
     fi
@@ -525,52 +340,6 @@ validate_ip_or_cidr() {
     return 1
 }
 
-# Add deny IP to metadata
-# Usage: metadata_add_deny_ip SERVICE_NAME IP
-metadata_add_deny_ip() {
-    local service_name="$1"
-    local ip="$2"
-    
-    load_metadata "$service_name"
-    
-    # Check if IP already exists
-    if echo "$METADATA" | jq -e ".deny_ips[] | select(. == \"$ip\")" >/dev/null 2>&1; then
-        echo "-----> IP '$ip' is already in deny list"
-        return 0
-    fi
-    
-    # Add IP to deny list
-    METADATA=$(echo "$METADATA" | jq ".deny_ips += [\"$ip\"]")
-    save_metadata "$service_name"
-}
-
-# Remove deny IP from metadata
-# Usage: metadata_remove_deny_ip SERVICE_NAME IP
-# If IP is empty, removes all deny IPs
-metadata_remove_deny_ip() {
-    local service_name="$1"
-    local ip="$2"
-    
-    load_metadata "$service_name"
-    
-    if [ -z "$ip" ]; then
-        # Remove all deny IPs
-        METADATA=$(echo "$METADATA" | jq ".deny_ips = []")
-        save_metadata "$service_name"
-        return 0
-    fi
-    
-    # Check if IP exists
-    if ! echo "$METADATA" | jq -e ".deny_ips[] | select(. == \"$ip\")" >/dev/null 2>&1; then
-        echo "-----> IP '$ip' is not in deny list"
-        return 0
-    fi
-    
-    # Remove IP from deny list
-    METADATA=$(echo "$METADATA" | jq ".deny_ips = (.deny_ips | map(select(. != \"$ip\")))")
-    save_metadata "$service_name"
-}
-
 # Generate deny/allow rules for server block
 # Usage: generate_deny_rules OUTPUT_FILE
 # Expects: METADATA variable to be set with deny_ips array
@@ -612,47 +381,6 @@ regenerate_all_server_blocks() {
     fi
 }
 
-# Generate or verify self-signed certificate for default server block
-# Usage: ensure_default_ssl_certificate SERVICE_NAME
-ensure_default_ssl_certificate() {
-    local service_name="$1"
-    local ssl_dir="/opt/gokku/services/$service_name/ssl"
-    local default_cert="$ssl_dir/default.crt"
-    local default_key="$ssl_dir/default.key"
-    
-    mkdir -p "$ssl_dir"
-    
-    # Check if openssl is available
-    if ! command -v openssl >/dev/null 2>&1; then
-        echo "-----> Warning: openssl not found, cannot generate default SSL certificate"
-        echo "-----> HTTPS blocking via IP may not work properly"
-        return 1
-    fi
-    
-    # Check if certificate already exists and is valid
-    if [ -f "$default_cert" ] && [ -f "$default_key" ]; then
-        # Verify certificate is still valid (not expired in next 24 hours)
-        if openssl x509 -in "$default_cert" -noout -checkend 86400 >/dev/null 2>&1; then
-            return 0
-        fi
-    fi
-    
-    # Generate self-signed certificate for blocking IP access
-    if openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-        -keyout "$default_key" \
-        -out "$default_cert" \
-        -subj "/CN=default/O=Gokku Nginx/C=US" \
-        -addext "subjectAltName=DNS:*,DNS:_,IP:*" \
-        2>/dev/null; then
-        # Set proper permissions
-        chmod 600 "$default_key" 2>/dev/null || true
-        chmod 644 "$default_cert" 2>/dev/null || true
-        return 0
-    else
-        echo "-----> Warning: Failed to generate default SSL certificate"
-        return 1
-    fi
-}
 
 # Generate default server block that blocks IP access
 # Usage: regenerate_default_server_block SERVICE_NAME
@@ -690,9 +418,9 @@ regenerate_default_server_block() {
     
     # Generate default server block that blocks access via IP
     if [ "$has_ssl_domain" -eq 1 ]; then
-        # Ensure default SSL certificate exists for HTTPS blocking
-        if ensure_default_ssl_certificate "$service_name"; then
-            cat > "$default_server_file" << EOF
+        # Block HTTPS via IP using ssl_reject_handshake (nginx 1.19.1+)
+        # This rejects SSL handshake without needing a certificate
+        cat > "$default_server_file" << 'EOF'
 # Default server block - blocks access via IP
 # This catches all HTTP and HTTPS requests that don't match any server_name
 server {
@@ -709,32 +437,10 @@ server {
     listen [::]:443 ssl default_server;
     server_name _;
     
-    # Use self-signed certificate (will show SSL warning, but blocks access)
-    ssl_certificate /etc/nginx/ssl/default.crt;
-    ssl_certificate_key /etc/nginx/ssl/default.key;
-    
-    # SSL configuration
-    ssl_protocols TLSv1.2 TLSv1.3;
-    
-    # Return 444 (connection closed without response) for all requests
-    return 444;
+    # Reject SSL handshake without certificate (nginx 1.19.1+)
+    ssl_reject_handshake on;
 }
 EOF
-        else
-            # Certificate generation failed, only block HTTP
-            cat > "$default_server_file" << 'EOF'
-# Default server block - blocks access via IP (HTTP only)
-# HTTPS blocking requires SSL certificate generation (openssl needed)
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    
-    # Return 444 (connection closed without response) for all requests
-    return 444;
-}
-EOF
-        fi
     else
         # No SSL domains, only block HTTP
         cat > "$default_server_file" << 'EOF'
