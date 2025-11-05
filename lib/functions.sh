@@ -274,10 +274,50 @@ server {
 EOF
 }
 
+# Update nginx.conf with required settings if missing
+# Usage: update_nginx_conf_if_needed SERVICE_NAME
+update_nginx_conf_if_needed() {
+    local service_name="$1"
+    local nginx_conf="/opt/gokku/services/$service_name/nginx.conf"
+    
+    if [ ! -f "$nginx_conf" ]; then
+        return 0
+    fi
+    
+    # Check if server_names_hash_bucket_size is already configured
+    if grep -q "server_names_hash_bucket_size" "$nginx_conf" 2>/dev/null; then
+        return 0
+    fi
+    
+    # Add server_names_hash settings after types_hash_max_size
+    if grep -q "types_hash_max_size" "$nginx_conf" 2>/dev/null; then
+        # Use sed to add the lines after types_hash_max_size
+        sed -i.bak '/types_hash_max_size/a\
+    server_names_hash_bucket_size 128;\
+    server_names_hash_max_size 4096;
+' "$nginx_conf" 2>/dev/null || {
+            # Fallback if sed -i doesn't work (macOS)
+            local temp_file=$(mktemp)
+            while IFS= read -r line; do
+                echo "$line" >> "$temp_file"
+                if [[ "$line" =~ types_hash_max_size ]]; then
+                    echo "    server_names_hash_bucket_size 128;" >> "$temp_file"
+                    echo "    server_names_hash_max_size 4096;" >> "$temp_file"
+                fi
+            done < "$nginx_conf"
+            mv "$temp_file" "$nginx_conf"
+        }
+        rm -f "${nginx_conf}.bak" 2>/dev/null || true
+    fi
+}
+
 # Ensure nginx container is running and up to date
 # Usage: ensure_nginx_running SERVICE_NAME
 ensure_nginx_running() {
     local service_name="$1"
+    
+    # Update nginx.conf if needed (for long domain names)
+    update_nginx_conf_if_needed "$service_name"
     
     if ! container_exists "$service_name"; then
         echo "-----> Container $service_name does not exist"

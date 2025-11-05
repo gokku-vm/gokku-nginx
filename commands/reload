@@ -25,6 +25,14 @@ if ! container_exists "$SERVICE_NAME"; then
     exit 1
 fi
 
+# Update nginx.conf if needed (for long domain names)
+update_nginx_conf_if_needed "$SERVICE_NAME"
+
+# Regenerate all server blocks from metadata
+echo "-----> Regenerating server blocks..."
+regenerate_all_server_blocks "$SERVICE_NAME"
+regenerate_default_server_block "$SERVICE_NAME"
+
 # Ensure container is running
 if ! ensure_nginx_running "$SERVICE_NAME"; then
     echo "-----> Failed to start nginx container"
