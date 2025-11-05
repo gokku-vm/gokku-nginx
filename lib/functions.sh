@@ -281,7 +281,8 @@ update_nginx_conf_if_needed() {
     local nginx_conf="/opt/gokku/services/$service_name/nginx.conf"
     
     if [ ! -f "$nginx_conf" ]; then
-        return 0
+        echo "-----> Warning: nginx.conf not found at $nginx_conf"
+        return 1
     fi
     
     # Check if server_names_hash_bucket_size is already configured
@@ -290,31 +291,53 @@ update_nginx_conf_if_needed() {
     fi
     
     # Add server_names_hash settings after types_hash_max_size
-    if grep -q "types_hash_max_size" "$nginx_conf" 2>/dev/null; then
-        echo "-----> Updating nginx.conf to support long domain names"
-        # Use sed to add the lines after types_hash_max_size
-        # Try sed first (Linux)
-        if sed -i.bak '/types_hash_max_size/a\
+    if ! grep -q "types_hash_max_size" "$nginx_conf" 2>/dev/null; then
+        echo "-----> Warning: types_hash_max_size not found in nginx.conf"
+        echo "-----> Cannot auto-update nginx.conf, please add server_names_hash_bucket_size 128; manually"
+        return 1
+    fi
+    
+    echo "-----> Updating nginx.conf to support long domain names"
+    
+    # Use sed to add the lines after types_hash_max_size
+    # Try sed first (Linux)
+    if sed -i.bak '/types_hash_max_size/a\
     server_names_hash_bucket_size 128;\
     server_names_hash_max_size 4096;
 ' "$nginx_conf" 2>/dev/null; then
-            rm -f "${nginx_conf}.bak" 2>/dev/null || true
-        else
-            # Fallback if sed -i doesn't work (macOS or when sed fails)
-            local temp_file=$(mktemp)
-            while IFS= read -r line || [ -n "$line" ]; do
-                echo "$line" >> "$temp_file"
-                if [[ "$line" =~ types_hash_max_size ]]; then
-                    echo "    server_names_hash_bucket_size 128;" >> "$temp_file"
-                    echo "    server_names_hash_max_size 4096;" >> "$temp_file"
-                fi
-            done < "$nginx_conf"
+        rm -f "${nginx_conf}.bak" 2>/dev/null || true
+        echo "-----> nginx.conf updated successfully (using sed)"
+    else
+        # Fallback if sed -i doesn't work (macOS or when sed fails)
+        echo "-----> Using fallback method to update nginx.conf"
+        local temp_file=$(mktemp)
+        local found=0
+        while IFS= read -r line || [ -n "$line" ]; do
+            echo "$line" >> "$temp_file"
+            if [[ "$line" =~ types_hash_max_size ]]; then
+                echo "    server_names_hash_bucket_size 128;" >> "$temp_file"
+                echo "    server_names_hash_max_size 4096;" >> "$temp_file"
+                found=1
+            fi
+        done < "$nginx_conf"
+        
+        if [ "$found" -eq 1 ]; then
             mv "$temp_file" "$nginx_conf"
+            echo "-----> nginx.conf updated successfully (using fallback)"
+        else
+            rm -f "$temp_file"
+            echo "-----> Error: Could not find types_hash_max_size in nginx.conf"
+            return 1
         fi
-        # Return 1 to indicate update was made (caller may need to restart container)
-        return 0
     fi
     
+    # Verify the update worked
+    if ! grep -q "server_names_hash_bucket_size" "$nginx_conf" 2>/dev/null; then
+        echo "-----> Error: Failed to update nginx.conf - verification failed"
+        return 1
+    fi
+    
+    echo "-----> Verification: nginx.conf now contains server_names_hash_bucket_size"
     return 0
 }
 

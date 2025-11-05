@@ -82,13 +82,25 @@ fi
 
 # Update nginx.conf if needed (for long domain names)
 # Must be done before testing configuration
-# Check if update is needed before calling
 nginx_conf_updated=0
-if ! grep -q "server_names_hash_bucket_size" "/opt/gokku/services/$SERVICE_NAME/nginx.conf" 2>/dev/null; then
-    update_nginx_conf_if_needed "$SERVICE_NAME"
-    nginx_conf_updated=1
+nginx_conf="/opt/gokku/services/$SERVICE_NAME/nginx.conf"
+
+if [ ! -f "$nginx_conf" ]; then
+    echo "-----> Warning: nginx.conf not found at $nginx_conf"
 else
-    update_nginx_conf_if_needed "$SERVICE_NAME"
+    # Check if update is needed
+    if ! grep -q "server_names_hash_bucket_size" "$nginx_conf" 2>/dev/null; then
+        if update_nginx_conf_if_needed "$SERVICE_NAME"; then
+            # Verify update succeeded
+            if grep -q "server_names_hash_bucket_size" "$nginx_conf" 2>/dev/null; then
+                nginx_conf_updated=1
+            else
+                echo "-----> Error: nginx.conf update failed"
+            fi
+        else
+            echo "-----> Error: Failed to update nginx.conf"
+        fi
+    fi
 fi
 
 # Ensure container is running
@@ -102,6 +114,11 @@ if [ "$nginx_conf_updated" -eq 1 ]; then
     echo "-----> Restarting container to apply nginx.conf changes..."
     docker restart "$SERVICE_NAME" >/dev/null 2>&1
     wait_for_container "$SERVICE_NAME" 30
+    
+    if ! container_is_running "$SERVICE_NAME"; then
+        echo "-----> Error: Container failed to restart after nginx.conf update"
+        exit 1
+    fi
 fi
 
 # Test configuration before applying
