@@ -39,20 +39,29 @@ get_ports_by_name "$APP_NAME"
 # Create upstream configuration file
 UPSTREAM_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/upstreams/${UPSTREAM_NAME}.conf"
 
+# Check network mode for debugging
+if is_host_network "$SERVICE_NAME"; then
+    NETWORK_MODE="host"
+else
+    NETWORK_MODE="bridge"
+fi
+
 if [ ${#PORTS[@]} -eq 0 ]; then
     echo "-----> No running containers found for app '$APP_NAME'"
     echo "-----> Creating upstream without servers (will be updated when containers start)"
-    # Create empty upstream
-    mkdir -p "$(dirname "$UPSTREAM_FILE")"
-    cat > "$UPSTREAM_FILE" << EOF
-upstream $UPSTREAM_NAME {
-    # No servers available yet
-}
-EOF
+    # Create upstream with placeholder server marked as down
+    # This prevents nginx config errors and allows upstream to be updated later
+    nginx_upstream_only "$UPSTREAM_FILE" "$UPSTREAM_NAME" "$SERVICE_NAME"
+    echo "-----> Upstream configuration created: $UPSTREAM_FILE"
+    echo "-----> WARNING: Upstream has no active servers - requests will fail until containers start"
+    echo "-----> Run 'gokku nginx:update-upstream $SERVICE_NAME $APP_NAME' after starting containers"
 else
     nginx_upstream_only "$UPSTREAM_FILE" "$UPSTREAM_NAME" "$SERVICE_NAME"
     echo "-----> Upstream configuration created: $UPSTREAM_FILE"
     echo "-----> Added ${#PORTS[@]} server(s) to upstream '$UPSTREAM_NAME'"
+    echo "-----> Network mode: $NETWORK_MODE"
+    echo "-----> Detected ports: ${PORTS[*]}"
+    echo "-----> Upstream will use: $(is_host_network "$SERVICE_NAME" && echo "127.0.0.1" || echo "$UPSTREAM_NAME")"
 fi
 
 # Add upstream to metadata

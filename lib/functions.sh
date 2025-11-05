@@ -22,9 +22,13 @@ get_ports_by_name() {
             # Check if container name matches app name (exact or starts with)
             if [ "$state" = "running" ] && [[ "$container_name" =~ ^${app_name}(-|$) ]]; then
                 if [ -n "$ports_field" ] && [ "$ports_field" != "null" ] && [ "$ports_field" != "" ]; then
-                    # Parse ports from format "0.0.0.0:3001->3001/tcp" or "0.0.0.0:3001->3001/tcp, [::]:3001->3001/tcp"
+                    # Parse ports from format:
+                    # - "0.0.0.0:3001->3001/tcp" (all interfaces)
+                    # - "127.0.0.1:3001->3001/tcp" (localhost only)
+                    # - "0.0.0.0:3001->3001/tcp, [::]:3001->3001/tcp" (IPv4 and IPv6)
                     # Extract host port (before ->) - format: IP:PORT->CONTAINER_PORT/tcp
-                    echo "$ports_field" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+->[0-9]+/tcp' | sed 's/.*://' | sed 's/->.*//'
+                    # Handle IPv4 format (most common)
+                    echo "$ports_field" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+->[0-9]+/tcp' | sed -E 's/.*:([0-9]+)->.*/\1/' | sort -u
                 fi
             fi
         fi
@@ -111,10 +115,12 @@ generate_locations_block() {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_connect_timeout 60s;
-        proxy_send_timeout 0;
-        proxy_read_timeout 0;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
         proxy_buffering off;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
     }
 
 EOF

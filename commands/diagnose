@@ -1,0 +1,125 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+APP_NAME="$2"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$APP_NAME" ]; then
+    echo "Usage: gokku nginx:diagnose-upstream <service> <app>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:diagnose-upstream nginx-lb api-transcoder"
+    exit 1
+fi
+
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
+echo "-----> Diagnosing upstream for app '$APP_NAME'"
+echo ""
+
+# Check if nginx service exists and is running
+if ! container_exists "$SERVICE_NAME"; then
+    echo "ERROR: Nginx service '$SERVICE_NAME' does not exist"
+    exit 1
+fi
+
+if ! container_is_running "$SERVICE_NAME"; then
+    echo "ERROR: Nginx service '$SERVICE_NAME' is not running"
+    exit 1
+fi
+
+# Check network mode
+if is_host_network "$SERVICE_NAME"; then
+    NETWORK_MODE="host"
+    EXPECTED_ADDR="127.0.0.1"
+else
+    NETWORK_MODE="bridge"
+    EXPECTED_ADDR="$APP_NAME"
+fi
+
+echo "Nginx Service: $SERVICE_NAME"
+echo "Network Mode: $NETWORK_MODE"
+echo "Expected Upstream Address: $EXPECTED_ADDR"
+echo ""
+
+# Check for running containers
+echo "Checking for running containers matching '$APP_NAME'..."
+get_ports_by_name "$APP_NAME"
+
+if [ ${#PORTS[@]} -eq 0 ]; then
+    echo "WARNING: No running containers found for app '$APP_NAME'"
+    echo ""
+    echo "Running containers:"
+    docker ps --filter "name=$APP_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    echo ""
+    echo "Upstream will not work until containers are running"
+    exit 1
+fi
+
+echo "Found ${#PORTS[@]} container(s) with ports: ${PORTS[*]}"
+echo ""
+
+# Check upstream file
+UPSTREAM_NAME="$APP_NAME"
+UPSTREAM_FILE="/opt/gokku/services/$SERVICE_NAME/conf.d/upstreams/${UPSTREAM_NAME}.conf"
+
+if [ ! -f "$UPSTREAM_FILE" ]; then
+    echo "ERROR: Upstream file not found: $UPSTREAM_FILE"
+    echo "Run: gokku nginx:add-upstream $SERVICE_NAME $APP_NAME"
+    exit 1
+fi
+
+echo "Upstream Configuration File: $UPSTREAM_FILE"
+echo "Contents:"
+cat "$UPSTREAM_FILE"
+echo ""
+
+# Check if upstream servers match expected addresses
+echo "Validating upstream configuration..."
+if grep -q "server $EXPECTED_ADDR:" "$UPSTREAM_FILE"; then
+    echo "✓ Upstream uses correct address format ($EXPECTED_ADDR)"
+else
+    echo "✗ WARNING: Upstream may not use correct address format"
+    echo "  Expected: server $EXPECTED_ADDR:PORT"
+    echo "  Found: $(grep -o 'server [^;]*' "$UPSTREAM_FILE" | head -1)"
+fi
+
+# Test connectivity from nginx container
+echo ""
+echo "Testing connectivity from nginx container..."
+for port in "${PORTS[@]}"; do
+    if [ "$NETWORK_MODE" = "host" ]; then
+        test_addr="127.0.0.1:$port"
+    else
+        test_addr="$APP_NAME:$port"
+    fi
+    
+    echo -n "  Testing $test_addr... "
+    if docker exec "$SERVICE_NAME" sh -c "nc -z -w 2 $test_addr 2>/dev/null" 2>/dev/null; then
+        echo "✓ Connection successful"
+    else
+        echo "✗ Connection failed"
+        echo "    This may indicate the upstream is not accessible"
+    fi
+done
+
+echo ""
+echo "Container Information:"
+docker ps --filter "name=$APP_NAME" --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+
+echo ""
+echo "Diagnostic Summary:"
+echo "  - Network Mode: $NETWORK_MODE"
+echo "  - Detected Ports: ${PORTS[*]}"
+echo "  - Upstream File: $UPSTREAM_FILE"
+echo "  - Expected Address: $EXPECTED_ADDR"
+
+if [ "$NETWORK_MODE" = "host" ]; then
+    echo ""
+    echo "NOTE: In host network mode, nginx accesses containers via localhost."
+    echo "      Ensure containers are mapped with -p 127.0.0.1:PORT:PORT or -p PORT:PORT"
+fi
+
