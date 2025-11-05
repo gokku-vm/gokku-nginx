@@ -298,8 +298,8 @@ generate_locations_block() {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_connect_timeout 60s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
+        proxy_send_timeout 0;
+        proxy_read_timeout 0;
         proxy_buffering off;
     }
 
