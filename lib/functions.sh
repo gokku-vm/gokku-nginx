@@ -92,10 +92,14 @@ load_metadata() {
     local metadata_file=$(get_metadata_file "$service_name")
     
     if [ -f "$metadata_file" ]; then
-        METADATA=$(cat "$metadata_file" 2>/dev/null || echo '{"domains":{},"upstreams":{}}')
+        METADATA=$(cat "$metadata_file" 2>/dev/null || echo '{"domains":{},"upstreams":{},"deny_ips":[]}')
+        # Ensure deny_ips field exists (backward compatibility)
+        if ! echo "$METADATA" | jq -e ".deny_ips" >/dev/null 2>&1; then
+            METADATA=$(echo "$METADATA" | jq '. + {"deny_ips": []}')
+        fi
     else
         # File doesn't exist - create it with empty structure for backward compatibility
-        METADATA='{"domains":{},"upstreams":{}}'
+        METADATA='{"domains":{},"upstreams":{},"deny_ips":[]}'
         mkdir -p "$(dirname "$metadata_file")"
         echo "$METADATA" | jq . > "$metadata_file" 2>/dev/null || echo "$METADATA" > "$metadata_file"
     fi
@@ -374,6 +378,8 @@ server {
     add_header X-XSS-Protection "1; mode=block" always;
 
 EOF
+        # Add deny/allow rules if there are deny IPs
+        generate_deny_rules "$server_file"
         
         # Add locations to HTTPS block
         generate_locations_block "$server_file" "$locations_json"
@@ -388,6 +394,8 @@ server {
     server_name $domain;
 
 EOF
+        # Add deny/allow rules if there are deny IPs
+        generate_deny_rules "$server_file"
         
         # Add locations
         generate_locations_block "$server_file" "$locations_json"
@@ -458,5 +466,171 @@ ensure_nginx_running() {
     fi
     
     return 0
+}
+
+# Validate IP address or CIDR notation
+# Usage: validate_ip_or_cidr IP
+# Returns: 0 if valid, 1 if invalid
+validate_ip_or_cidr() {
+    local ip="$1"
+    
+    # Check if it's a valid IP address (IPv4)
+    if [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        # Validate each octet
+        IFS='.' read -r -a octets <<< "$ip"
+        for octet in "${octets[@]}"; do
+            if [ "$octet" -gt 255 ]; then
+                return 1
+            fi
+        done
+        return 0
+    fi
+    
+    # Check if it's a valid CIDR notation
+    if [[ "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+        # Extract IP and prefix
+        local ip_part="${ip%/*}"
+        local prefix="${ip#*/}"
+        
+        # Validate IP part
+        if ! validate_ip_or_cidr "$ip_part"; then
+            return 1
+        fi
+        
+        # Validate prefix (0-32)
+        if [ "$prefix" -gt 32 ]; then
+            return 1
+        fi
+        
+        return 0
+    fi
+    
+    return 1
+}
+
+# Add deny IP to metadata
+# Usage: metadata_add_deny_ip SERVICE_NAME IP
+metadata_add_deny_ip() {
+    local service_name="$1"
+    local ip="$2"
+    
+    load_metadata "$service_name"
+    
+    # Check if IP already exists
+    if echo "$METADATA" | jq -e ".deny_ips[] | select(. == \"$ip\")" >/dev/null 2>&1; then
+        echo "-----> IP '$ip' is already in deny list"
+        return 0
+    fi
+    
+    # Add IP to deny list
+    METADATA=$(echo "$METADATA" | jq ".deny_ips += [\"$ip\"]")
+    save_metadata "$service_name"
+}
+
+# Remove deny IP from metadata
+# Usage: metadata_remove_deny_ip SERVICE_NAME IP
+# If IP is empty, removes all deny IPs
+metadata_remove_deny_ip() {
+    local service_name="$1"
+    local ip="$2"
+    
+    load_metadata "$service_name"
+    
+    if [ -z "$ip" ]; then
+        # Remove all deny IPs
+        METADATA=$(echo "$METADATA" | jq ".deny_ips = []")
+        save_metadata "$service_name"
+        return 0
+    fi
+    
+    # Check if IP exists
+    if ! echo "$METADATA" | jq -e ".deny_ips[] | select(. == \"$ip\")" >/dev/null 2>&1; then
+        echo "-----> IP '$ip' is not in deny list"
+        return 0
+    fi
+    
+    # Remove IP from deny list
+    METADATA=$(echo "$METADATA" | jq ".deny_ips = (.deny_ips | map(select(. != \"$ip\")))")
+    save_metadata "$service_name"
+}
+
+# Generate deny/allow rules for server block
+# Usage: generate_deny_rules OUTPUT_FILE
+# Expects: METADATA variable to be set with deny_ips array
+generate_deny_rules() {
+    local output_file="$1"
+    
+    # Get deny IPs from metadata
+    local deny_ips=$(echo "$METADATA" | jq -r ".deny_ips[]?" 2>/dev/null)
+    
+    if [ -n "$deny_ips" ]; then
+        # Add deny rules
+        while IFS= read -r ip; do
+            if [ -n "$ip" ]; then
+                echo "    deny $ip;" >> "$output_file"
+            fi
+        done <<< "$deny_ips"
+        
+        # Add allow all after deny rules
+        echo "    allow all;" >> "$output_file"
+    fi
+}
+
+# Regenerate all server blocks
+# Usage: regenerate_all_server_blocks SERVICE_NAME
+regenerate_all_server_blocks() {
+    local service_name="$1"
+    
+    load_metadata "$service_name"
+    
+    # Get all domains
+    local domains=$(echo "$METADATA" | jq -r ".domains | keys[]" 2>/dev/null)
+    
+    if [ -n "$domains" ]; then
+        while IFS= read -r domain; do
+            if [ -n "$domain" ]; then
+                nginx_generate_server_block "$service_name" "$domain"
+            fi
+        done <<< "$domains"
+    fi
+}
+
+# Generate default server block that blocks IP access
+# Usage: regenerate_default_server_block SERVICE_NAME
+regenerate_default_server_block() {
+    local service_name="$1"
+    local default_server_file="/opt/gokku/services/$service_name/conf.d/servers/default.conf"
+    
+    load_metadata "$service_name"
+    
+    # Check if there are any domains configured
+    local domains_count=$(echo "$METADATA" | jq ".domains | length" 2>/dev/null)
+    
+    if [ -z "$domains_count" ] || [ "$domains_count" = "null" ] || [ "$domains_count" = "0" ]; then
+        # No domains configured, remove default server block
+        rm -f "$default_server_file"
+        return
+    fi
+    
+    # Create directory if it doesn't exist
+    mkdir -p "$(dirname "$default_server_file")"
+    
+    # Generate default server block that blocks access via IP
+    # This block catches requests that don't match any server_name
+    # Note: HTTPS access via IP is automatically blocked since nginx requires
+    # matching server_name with valid SSL certificate
+    cat > "$default_server_file" << 'EOF'
+# Default server block - blocks access via IP
+# This catches all HTTP requests that don't match any server_name
+# HTTPS requests without matching server_name are automatically rejected by nginx
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    
+    # Return 444 (connection closed without response) for all requests
+    return 444;
+}
+EOF
 }
 

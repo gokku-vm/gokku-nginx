@@ -90,6 +90,9 @@ metadata_add_location "$SERVICE_NAME" "$DOMAIN" "$LOCATION_PATH" "$UPSTREAM_NAME
 # Generate server block
 nginx_generate_server_block "$SERVICE_NAME" "$DOMAIN"
 
+# Regenerate default server block to ensure IP blocking is active
+regenerate_default_server_block "$SERVICE_NAME"
+
 echo "-----> Location '$LOCATION_PATH' added for domain '$DOMAIN'"
 
 # Ensure container is running

@@ -1,0 +1,43 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+
+if [ -z "$SERVICE_NAME" ]; then
+    echo "Usage: gokku nginx:list-deny-ips <service>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:list-deny-ips nginx-lb"
+    exit 1
+fi
+
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
+echo "Deny IPs for service '$SERVICE_NAME':"
+echo "====================================="
+
+load_metadata "$SERVICE_NAME"
+
+# Get all deny IPs from metadata
+deny_ips=$(echo "$METADATA" | jq -r ".deny_ips[]?" 2>/dev/null)
+
+if [ -z "$deny_ips" ]; then
+    echo "  No deny IPs configured"
+    exit 0
+fi
+
+ip_count=0
+while IFS= read -r ip; do
+    if [ -n "$ip" ]; then
+        echo "  $ip"
+        ip_count=$((ip_count + 1))
+    fi
+done <<< "$deny_ips"
+
+echo ""
+echo "Total: $ip_count IP(s) in deny list"
+echo ""
+

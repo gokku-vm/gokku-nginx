@@ -94,7 +94,8 @@ EOF
 cat > "$SERVICE_DIR/metadata.json" << 'EOF'
 {
   "domains": {},
-  "upstreams": {}
+  "upstreams": {},
+  "deny_ips": []
 }
 EOF
 

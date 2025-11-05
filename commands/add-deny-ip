@@ -1,0 +1,66 @@
+#!/bin/bash
+SERVICE_NAME="$1"
+IP="$2"
+
+if [ -z "$SERVICE_NAME" ] || [ -z "$IP" ]; then
+    echo "Usage: gokku nginx:add-deny-ip <service> <ip>"
+    echo ""
+    echo "Examples:"
+    echo "  gokku nginx:add-deny-ip nginx-lb 192.168.1.100"
+    echo "  gokku nginx:add-deny-ip nginx-lb 10.0.0.0/8"
+    exit 1
+fi
+
+# Source plugin helpers
+source /opt/gokku/scripts/plugin-helpers.sh
+
+# Source local functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/functions.sh"
+
+# Validate IP or CIDR format
+if ! validate_ip_or_cidr "$IP"; then
+    echo "-----> Error: Invalid IP address or CIDR format: $IP"
+    echo "-----> Valid formats: 192.168.1.100 or 10.0.0.0/8"
+    exit 1
+fi
+
+echo "-----> Adding deny IP '$IP' for service '$SERVICE_NAME'"
+
+# Add IP to deny list
+metadata_add_deny_ip "$SERVICE_NAME" "$IP"
+
+# Regenerate all server blocks to include deny rules
+echo "-----> Regenerating server blocks..."
+regenerate_all_server_blocks "$SERVICE_NAME"
+
+# Regenerate default server block
+regenerate_default_server_block "$SERVICE_NAME"
+
+# Ensure container is running
+if ! ensure_nginx_running "$SERVICE_NAME"; then
+    echo "-----> Failed to start nginx container"
+    exit 1
+fi
+
+# Test configuration before applying
+echo "-----> Testing nginx configuration..."
+if ! docker exec "$SERVICE_NAME" nginx -t; then
+    echo "-----> Configuration test failed"
+    echo "-----> Fix configuration errors before continuing"
+    exit 1
+fi
+
+# Reload nginx configuration
+echo "-----> Reloading nginx configuration"
+docker restart "$SERVICE_NAME" >/dev/null 2>&1
+wait_for_container "$SERVICE_NAME" 30
+
+if container_is_running "$SERVICE_NAME"; then
+    echo "-----> Nginx container restarted"
+else
+    echo "-----> Warning: Container may not be running properly"
+fi
+
+echo "-----> Deny IP '$IP' successfully added"
+

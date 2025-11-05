@@ -99,6 +99,7 @@ if [ -n "$domains" ]; then
             nginx_generate_server_block "$SERVICE_NAME" "$domain"
         fi
     done
+    regenerate_default_server_block "$SERVICE_NAME"
 fi
 
 echo "-----> Upstream '$UPSTREAM_NAME' updated"

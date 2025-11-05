@@ -63,6 +63,7 @@ if [ -n "$DOMAIN" ]; then
     echo "-----> Adding location '/' for domain '$DOMAIN'"
     metadata_add_location "$SERVICE_NAME" "$DOMAIN" "/" "$UPSTREAM_NAME" "$APP_NAME"
     nginx_generate_server_block "$SERVICE_NAME" "$DOMAIN"
+    regenerate_default_server_block "$SERVICE_NAME"
 fi
 
 # Ensure container is running
