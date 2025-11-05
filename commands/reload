@@ -25,29 +25,6 @@ if ! container_exists "$SERVICE_NAME"; then
     exit 1
 fi
 
-# Update nginx.conf if needed (for long domain names)
-# Must be done before regenerating server blocks
-nginx_conf_updated=0
-nginx_conf="/opt/gokku/services/$SERVICE_NAME/nginx.conf"
-
-if [ ! -f "$nginx_conf" ]; then
-    echo "-----> Warning: nginx.conf not found at $nginx_conf"
-else
-    # Check if update is needed
-    if ! grep -q "server_names_hash_bucket_size" "$nginx_conf" 2>/dev/null; then
-        if update_nginx_conf_if_needed "$SERVICE_NAME"; then
-            # Verify update succeeded
-            if grep -q "server_names_hash_bucket_size" "$nginx_conf" 2>/dev/null; then
-                nginx_conf_updated=1
-            else
-                echo "-----> Error: nginx.conf update failed"
-            fi
-        else
-            echo "-----> Error: Failed to update nginx.conf"
-        fi
-    fi
-fi
-
 # Regenerate all server blocks from metadata
 echo "-----> Regenerating server blocks..."
 regenerate_all_server_blocks "$SERVICE_NAME"
@@ -57,18 +34,6 @@ regenerate_default_server_block "$SERVICE_NAME"
 if ! ensure_nginx_running "$SERVICE_NAME"; then
     echo "-----> Failed to start nginx container"
     exit 1
-fi
-
-# Restart container if nginx.conf was updated (to pick up changes)
-if [ "$nginx_conf_updated" -eq 1 ]; then
-    echo "-----> Restarting container to apply nginx.conf changes..."
-    docker restart "$SERVICE_NAME" >/dev/null 2>&1
-    wait_for_container "$SERVICE_NAME" 30
-    
-    if ! container_is_running "$SERVICE_NAME"; then
-        echo "-----> Error: Container failed to restart after nginx.conf update"
-        exit 1
-    fi
 fi
 
 # Test configuration before applying
