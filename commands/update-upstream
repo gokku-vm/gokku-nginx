@@ -28,7 +28,23 @@ else
     UPSTREAM_NAME="$APP_NAME"
 fi
 
-# Get all running container ports using docker ps
+# Wait for containers to be ready after app update
+echo "-----> Waiting for containers to be ready..."
+max_attempts=10
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+    get_ports_by_name "$APP_NAME"
+    if [ ${#PORTS[@]} -gt 0 ]; then
+        echo "-----> Found ${#PORTS[@]} container(s) ready"
+        break
+    fi
+    attempt=$((attempt + 1))
+    if [ $attempt -lt $max_attempts ]; then
+        sleep 1
+    fi
+done
+
+# Get all running container ports using docker ps (final check)
 get_ports_by_name "$APP_NAME"
 
 # Update upstream configuration file
@@ -53,6 +69,24 @@ else
     echo "-----> Added ${#PORTS[@]} server(s) to upstream '$UPSTREAM_NAME'"
 fi
 
+# Regenerate all server blocks that use this upstream BEFORE reloading nginx
+load_metadata "$SERVICE_NAME"
+domains=$(echo "$METADATA" | jq -r ".domains | keys[]" 2>/dev/null)
+
+if [ -n "$domains" ]; then
+    # Use process substitution to avoid subshell issues
+    while IFS= read -r domain; do
+        if [ -n "$domain" ]; then
+            uses_upstream=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations[]? | select(.upstream == \"$UPSTREAM_NAME\")" 2>/dev/null)
+            if [ -n "$uses_upstream" ] && [ "$uses_upstream" != "null" ]; then
+                echo "-----> Regenerating server block for domain '$domain'"
+                nginx_generate_server_block "$SERVICE_NAME" "$domain"
+            fi
+        fi
+    done < <(echo "$domains")
+    regenerate_default_server_block "$SERVICE_NAME"
+fi
+
 # Ensure container is running
 if ! ensure_nginx_running "$SERVICE_NAME"; then
     echo "-----> Failed to start nginx container"
@@ -67,39 +101,26 @@ if ! docker exec "$SERVICE_NAME" nginx -t; then
     exit 1
 fi
 
-# Restart container to ensure all changes are applied
-echo "-----> Restarting nginx container to apply configuration"
-if docker restart "$SERVICE_NAME" >/dev/null 2>&1; then
-    echo "-----> Waiting for nginx to restart..."
-    wait_for_container "$SERVICE_NAME" 30
-    
-    if container_is_running "$SERVICE_NAME"; then
-        echo "-----> Nginx container restarted successfully"
-    else
-        echo "-----> Warning: Container restarted but may not be running properly"
-        docker logs --tail 20 "$SERVICE_NAME" 2>/dev/null || true
-    fi
+# Reload nginx configuration (prefer reload over restart)
+echo "-----> Reloading nginx configuration"
+if docker exec "$SERVICE_NAME" nginx -s reload 2>/dev/null; then
+    echo "-----> Nginx configuration reloaded successfully"
 else
-    echo "-----> Failed to restart nginx container, trying reload instead"
-    if docker exec "$SERVICE_NAME" nginx -s reload 2>/dev/null; then
-        echo "-----> Nginx configuration reloaded"
-    else
-        echo "-----> Warning: Could not reload nginx configuration"
-    fi
-fi
-
-# Regenerate all server blocks that use this upstream
-load_metadata "$SERVICE_NAME"
-domains=$(echo "$METADATA" | jq -r ".domains | keys[]" 2>/dev/null)
-
-if [ -n "$domains" ]; then
-    echo "$domains" | while IFS= read -r domain; do
-        uses_upstream=$(echo "$METADATA" | jq ".domains[\"$domain\"].locations[]? | select(.upstream == \"$UPSTREAM_NAME\")" 2>/dev/null)
-        if [ -n "$uses_upstream" ] && [ "$uses_upstream" != "null" ]; then
-            nginx_generate_server_block "$SERVICE_NAME" "$domain"
+    echo "-----> Reload failed, restarting container..."
+    if docker restart "$SERVICE_NAME" >/dev/null 2>&1; then
+        echo "-----> Waiting for nginx to restart..."
+        wait_for_container "$SERVICE_NAME" 30
+        
+        if container_is_running "$SERVICE_NAME"; then
+            echo "-----> Nginx container restarted successfully"
+        else
+            echo "-----> Warning: Container restarted but may not be running properly"
+            docker logs --tail 20 "$SERVICE_NAME" 2>/dev/null || true
         fi
-    done
-    regenerate_default_server_block "$SERVICE_NAME"
+    else
+        echo "-----> Failed to restart nginx container"
+        exit 1
+    fi
 fi
 
 echo "-----> Upstream '$UPSTREAM_NAME' updated"

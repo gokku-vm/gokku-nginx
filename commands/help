@@ -22,6 +22,16 @@ Upstream Management:
   gokku nginx:update-upstream <service> <app> [type]  Update upstream with current containers
   gokku nginx:remove-upstream <service> <app>         Remove upstream for app
 
+Location Management:
+  gokku nginx:add-location <service> <app> <path> <domain>     Add location/path routing
+  gokku nginx:remove-location <service> <app> <path> <domain>   Remove location/path routing
+  gokku nginx:list-locations <service> <domain>                List all locations for domain
+
+IP Denial Management:
+  gokku nginx:add-deny-ip <service> <ip>              Add IP or CIDR to deny list
+  gokku nginx:remove-deny-ip <service> [ip]           Remove IP from deny list (or all if no IP)
+  gokku nginx:list-deny-ips <service>                 List all denied IPs
+
 Examples:
   # Service management
   gokku nginx:info nginx-lb
@@ -37,6 +47,17 @@ Examples:
   gokku nginx:add-upstream nginx-lb api
   gokku nginx:update-upstream nginx-lb api web
   gokku nginx:remove-upstream nginx-lb api
+
+  # Location management
+  gokku nginx:add-location nginx-lb user-service /users api.example.com
+  gokku nginx:list-locations nginx-lb api.example.com
+  gokku nginx:remove-location nginx-lb user-service /users api.example.com
+
+  # IP denial management
+  gokku nginx:add-deny-ip nginx-lb 192.168.1.100
+  gokku nginx:add-deny-ip nginx-lb 10.0.0.0/8
+  gokku nginx:list-deny-ips nginx-lb
+  gokku nginx:remove-deny-ip nginx-lb 192.168.1.100
 
 Configuration:
   Service directory: /opt/gokku/services/<service>/

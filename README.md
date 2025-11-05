@@ -87,6 +87,30 @@ gokku nginx:remove-location nginx-lb user-service /users api.example.com
 - **API Versioning**: Version your API with different paths (e.g., `/v1`, `/v2`)
 - **Service Separation**: Separate admin, public, and internal routes
 
+### IP Denial Management
+
+Manage IP addresses and CIDR ranges that should be denied access:
+
+```bash
+# Add an IP address or CIDR range to deny list
+gokku nginx:add-deny-ip nginx-lb 192.168.1.100
+gokku nginx:add-deny-ip nginx-lb 10.0.0.0/8
+
+# List all denied IP addresses and CIDR ranges
+gokku nginx:list-deny-ips nginx-lb
+
+# Remove a specific IP address or CIDR range
+gokku nginx:remove-deny-ip nginx-lb 192.168.1.100
+
+# Remove all denied IPs
+gokku nginx:remove-deny-ip nginx-lb
+```
+
+**Use Cases:**
+- **Security**: Block malicious IP addresses
+- **Rate Limiting**: Prevent abuse from specific IPs or ranges
+- **Access Control**: Restrict access to specific network ranges
+
 ### Service Management
 
 ```bash
