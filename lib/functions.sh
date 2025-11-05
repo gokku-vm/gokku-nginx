@@ -612,6 +612,48 @@ regenerate_all_server_blocks() {
     fi
 }
 
+# Generate or verify self-signed certificate for default server block
+# Usage: ensure_default_ssl_certificate SERVICE_NAME
+ensure_default_ssl_certificate() {
+    local service_name="$1"
+    local ssl_dir="/opt/gokku/services/$service_name/ssl"
+    local default_cert="$ssl_dir/default.crt"
+    local default_key="$ssl_dir/default.key"
+    
+    mkdir -p "$ssl_dir"
+    
+    # Check if openssl is available
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "-----> Warning: openssl not found, cannot generate default SSL certificate"
+        echo "-----> HTTPS blocking via IP may not work properly"
+        return 1
+    fi
+    
+    # Check if certificate already exists and is valid
+    if [ -f "$default_cert" ] && [ -f "$default_key" ]; then
+        # Verify certificate is still valid (not expired in next 24 hours)
+        if openssl x509 -in "$default_cert" -noout -checkend 86400 >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    
+    # Generate self-signed certificate for blocking IP access
+    if openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+        -keyout "$default_key" \
+        -out "$default_cert" \
+        -subj "/CN=default/O=Gokku Nginx/C=US" \
+        -addext "subjectAltName=DNS:*,DNS:_,IP:*" \
+        2>/dev/null; then
+        # Set proper permissions
+        chmod 600 "$default_key" 2>/dev/null || true
+        chmod 644 "$default_cert" 2>/dev/null || true
+        return 0
+    else
+        echo "-----> Warning: Failed to generate default SSL certificate"
+        return 1
+    fi
+}
+
 # Generate default server block that blocks IP access
 # Usage: regenerate_default_server_block SERVICE_NAME
 regenerate_default_server_block() {
@@ -632,14 +674,57 @@ regenerate_default_server_block() {
     # Create directory if it doesn't exist
     mkdir -p "$(dirname "$default_server_file")"
     
+    # Check if any domain has SSL configured
+    local has_ssl_domain=0
+    local domains=$(echo "$METADATA" | jq -r ".domains | keys[]" 2>/dev/null)
+    if [ -n "$domains" ]; then
+        while IFS= read -r domain; do
+            if [ -n "$domain" ]; then
+                if check_ssl_certificates "$service_name" "$domain"; then
+                    has_ssl_domain=1
+                    break
+                fi
+            fi
+        done < <(echo "$domains")
+    fi
+    
     # Generate default server block that blocks access via IP
-    # This block catches requests that don't match any server_name
-    # Note: HTTPS access via IP is automatically blocked since nginx requires
-    # matching server_name with valid SSL certificate
-    cat > "$default_server_file" << 'EOF'
+    if [ "$has_ssl_domain" -eq 1 ]; then
+        # Ensure default SSL certificate exists for HTTPS blocking
+        if ensure_default_ssl_certificate "$service_name"; then
+            cat > "$default_server_file" << EOF
 # Default server block - blocks access via IP
-# This catches all HTTP requests that don't match any server_name
-# HTTPS requests without matching server_name are automatically rejected by nginx
+# This catches all HTTP and HTTPS requests that don't match any server_name
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    
+    # Return 444 (connection closed without response) for all requests
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    
+    # Use self-signed certificate (will show SSL warning, but blocks access)
+    ssl_certificate /etc/nginx/ssl/default.crt;
+    ssl_certificate_key /etc/nginx/ssl/default.key;
+    
+    # SSL configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    
+    # Return 444 (connection closed without response) for all requests
+    return 444;
+}
+EOF
+        else
+            # Certificate generation failed, only block HTTP
+            cat > "$default_server_file" << 'EOF'
+# Default server block - blocks access via IP (HTTP only)
+# HTTPS blocking requires SSL certificate generation (openssl needed)
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -649,5 +734,21 @@ server {
     return 444;
 }
 EOF
+        fi
+    else
+        # No SSL domains, only block HTTP
+        cat > "$default_server_file" << 'EOF'
+# Default server block - blocks access via IP
+# This catches all HTTP requests that don't match any server_name
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    
+    # Return 444 (connection closed without response) for all requests
+    return 444;
+}
+EOF
+    fi
 }
 
