@@ -95,10 +95,27 @@ regenerate_default_server_block "$SERVICE_NAME"
 
 echo "-----> Location '$LOCATION_PATH' added for domain '$DOMAIN'"
 
+# Update nginx.conf if needed (for long domain names)
+# Must be done before testing configuration
+nginx_conf_updated=0
+if ! grep -q "server_names_hash_bucket_size" "/opt/gokku/services/$SERVICE_NAME/nginx.conf" 2>/dev/null; then
+    update_nginx_conf_if_needed "$SERVICE_NAME"
+    nginx_conf_updated=1
+else
+    update_nginx_conf_if_needed "$SERVICE_NAME"
+fi
+
 # Ensure container is running
 if ! ensure_nginx_running "$SERVICE_NAME"; then
     echo "-----> Failed to start nginx container"
     exit 1
+fi
+
+# Restart container if nginx.conf was updated (to pick up changes)
+if [ "$nginx_conf_updated" -eq 1 ]; then
+    echo "-----> Restarting container to apply nginx.conf changes..."
+    docker restart "$SERVICE_NAME" >/dev/null 2>&1
+    wait_for_container "$SERVICE_NAME" 30
 fi
 
 # Test configuration before applying

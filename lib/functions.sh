@@ -291,14 +291,18 @@ update_nginx_conf_if_needed() {
     
     # Add server_names_hash settings after types_hash_max_size
     if grep -q "types_hash_max_size" "$nginx_conf" 2>/dev/null; then
+        echo "-----> Updating nginx.conf to support long domain names"
         # Use sed to add the lines after types_hash_max_size
-        sed -i.bak '/types_hash_max_size/a\
+        # Try sed first (Linux)
+        if sed -i.bak '/types_hash_max_size/a\
     server_names_hash_bucket_size 128;\
     server_names_hash_max_size 4096;
-' "$nginx_conf" 2>/dev/null || {
-            # Fallback if sed -i doesn't work (macOS)
+' "$nginx_conf" 2>/dev/null; then
+            rm -f "${nginx_conf}.bak" 2>/dev/null || true
+        else
+            # Fallback if sed -i doesn't work (macOS or when sed fails)
             local temp_file=$(mktemp)
-            while IFS= read -r line; do
+            while IFS= read -r line || [ -n "$line" ]; do
                 echo "$line" >> "$temp_file"
                 if [[ "$line" =~ types_hash_max_size ]]; then
                     echo "    server_names_hash_bucket_size 128;" >> "$temp_file"
@@ -306,9 +310,12 @@ update_nginx_conf_if_needed() {
                 fi
             done < "$nginx_conf"
             mv "$temp_file" "$nginx_conf"
-        }
-        rm -f "${nginx_conf}.bak" 2>/dev/null || true
+        fi
+        # Return 1 to indicate update was made (caller may need to restart container)
+        return 0
     fi
+    
+    return 0
 }
 
 # Ensure nginx container is running and up to date
