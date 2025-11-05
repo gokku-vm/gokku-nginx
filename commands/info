@@ -120,10 +120,3 @@ fi
 echo ""
 echo "Nginx Version:"
 docker exec "$SERVICE_NAME" nginx -v 2>&1 | head -1
-
-# Show active connections (if nginx is running)
-if container_is_running "$SERVICE_NAME"; then
-    echo ""
-    echo "Active Connections:"
-    docker exec "$SERVICE_NAME" nginx -s status 2>/dev/null || echo "  Status not available"
-fi
