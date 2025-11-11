@@ -272,9 +272,9 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_connect_timeout 0;
-        proxy_send_timeout 0;
-        proxy_read_timeout 0;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
     }
 }
 EOF
@@ -429,15 +429,6 @@ regenerate_default_server_block() {
         cat > "$default_server_file" << 'EOF'
 # Default server block - blocks access via IP
 # This catches all HTTP and HTTPS requests that don't match any server_name
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-    
-    # Return 444 (connection closed without response) for all requests
-    return 444;
-}
-
 server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
